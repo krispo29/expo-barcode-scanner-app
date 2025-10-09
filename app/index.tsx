@@ -32,6 +32,7 @@ export default function IndexScreen() {
 
   const cameraRef = useRef<CameraView>(null);
   const unlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const idCounter = useRef(0);
 
   useEffect(() => {
     if (!permission) {
@@ -68,8 +69,9 @@ export default function IndexScreen() {
 
         await fakeSubmit({ customerId: customer.id, trackingNo: normalized, mode });
 
+        idCounter.current += 1;
         const record: ScanRecord = {
-          id: `${Date.now()}`,
+          id: `${Date.now()}-${idCounter.current}`,
           customerId: customer.id,
           code: normalized,
           scannedAt: new Date().toISOString(),
