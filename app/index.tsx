@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Platform, SafeAreaView, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, Vibration, View } from "react-native";
 import { CameraView, BarcodeScanningResult, useCameraPermissions } from "expo-camera";
 import { StatusBar } from "expo-status-bar";
@@ -18,8 +18,6 @@ const CUSTOMERS: Customer[] = [
   { id: "HEYNATURE", name: "Heynature", description: "ทดสอบสำหรับ shipment" },
   { id: "ACME", name: "ACME Co.", description: "ลูกค้าสมมติ" },
 ];
-
-const SAMPLE_TRACKING = "693837656852"; // ตัวเลขจากตัวอย่างบิลที่ให้มา
 
 export default function IndexScreen() {
   const [permission, requestPermission] = useCameraPermissions();
@@ -45,9 +43,6 @@ export default function IndexScreen() {
       if (unlockTimer.current) clearTimeout(unlockTimer.current);
     };
   }, []);
-
-  const ean13Sample = useMemo(() => ensureEan13(SAMPLE_TRACKING), []);
-  const barcodeBits = useMemo(() => encodeEan13(ean13Sample), [ean13Sample]);
 
   const handleDetected = useCallback(
     async (rawValue: string, mode: "auto" | "manual") => {
@@ -208,64 +203,6 @@ export default function IndexScreen() {
             </View>
           </View>
 
-          <View style={styles.previewCard}>
-            <View style={styles.previewHeader}>
-              <Text style={styles.previewTitle}>ตัวอย่างหน้าจอเว็บ</Text>
-              <Text style={styles.previewSubtitle}>สำหรับเทสการทำงานร่วมกับแอพสแกน</Text>
-            </View>
-            <View style={styles.previewBody}>
-              <View style={styles.previewTableHeader}>
-                <Text style={styles.previewTableTitle}>Released</Text>
-                <Text style={styles.previewTableFilter}>Filter Table</Text>
-              </View>
-              <View style={styles.previewEmpty}>
-                <Text style={styles.previewEmptyText}>There are no records to display.</Text>
-              </View>
-            </View>
-          </View>
-
-          <View style={styles.barcodeCard}>
-            <Text style={styles.sectionTitle}>ตัวอย่าง Barcode (EAN-13)</Text>
-            <Text style={styles.sectionHelp}>
-              ใช้กดเพื่อส่งค่าเข้าระบบทดสอบ หรือสแกนจากหน้าจออื่นก็ได้
-            </Text>
-            <TouchableOpacity
-              onPress={() => handleDetected(ean13Sample, autoEnter ? "auto" : "manual")}
-              activeOpacity={0.75}
-            >
-              <View style={styles.barcodeBox}>
-                <View style={styles.barcodeStripRow}>
-                  {barcodeBits.map((bit, index) => (
-                    <View
-                      key={`bit-${index}`}
-                      style={[
-                        styles.barcodeStrip,
-                        bit === 1 ? styles.barcodeBlack : styles.barcodeWhite,
-                      ]}
-                    />
-                  ))}
-                </View>
-                <View style={styles.barcodeDigitsRow}>
-                  <Text style={styles.barcodeLeftDigit}>{ean13Sample[0]}</Text>
-                  <View style={styles.barcodeGroup}>
-                    {ean13Sample.slice(1, 7).split("").map((digit, idx) => (
-                      <Text key={`L-${idx}`} style={styles.barcodeDigit}>
-                        {digit}
-                      </Text>
-                    ))}
-                  </View>
-                  <View style={styles.barcodeGroup}>
-                    {ean13Sample.slice(7).split("").map((digit, idx) => (
-                      <Text key={`R-${idx}`} style={styles.barcodeDigit}>
-                        {digit}
-                      </Text>
-                    ))}
-                  </View>
-                </View>
-                <Text style={styles.barcodeCaption}>Lot No. HPC0222 • Air</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
         </ScrollView>
 
         <View style={styles.cameraSheet}>
@@ -355,94 +292,6 @@ function normalizeTracking(value: string) {
   return onlyDigits.trim().toUpperCase();
 }
 
-function ensureEan13(value: string) {
-  const digits = value.replace(/\D/g, "");
-  if (digits.length === 0) return "";
-  if (digits.length === 13) return digits;
-  if (digits.length !== 12) {
-    throw new Error("EAN-13 ต้องมี 12 หรือ 13 หลัก");
-  }
-  const sum = digits
-    .split("")
-    .map((digit, index) => Number(digit) * (index % 2 === 0 ? 1 : 3))
-    .reduce((acc, num) => acc + num, 0);
-  const check = (10 - (sum % 10)) % 10;
-  return digits + String(check);
-}
-
-const PARITY_TABLE: Record<string, string> = {
-  "0": "LLLLLL",
-  "1": "LLGLGG",
-  "2": "LLGGLG",
-  "3": "LLGGGL",
-  "4": "LGLLGG",
-  "5": "LGGLLG",
-  "6": "LGGGLL",
-  "7": "LGLGLG",
-  "8": "LGLGGL",
-  "9": "LGGLGL",
-};
-
-const L_CODES: Record<string, string> = {
-  "0": "0001101",
-  "1": "0011001",
-  "2": "0010011",
-  "3": "0111101",
-  "4": "0100011",
-  "5": "0110001",
-  "6": "0101111",
-  "7": "0111011",
-  "8": "0110111",
-  "9": "0001011",
-};
-
-const G_CODES: Record<string, string> = {
-  "0": "0100111",
-  "1": "0110011",
-  "2": "0011011",
-  "3": "0100001",
-  "4": "0011101",
-  "5": "0111001",
-  "6": "0000101",
-  "7": "0010001",
-  "8": "0001001",
-  "9": "0010111",
-};
-
-const R_CODES: Record<string, string> = {
-  "0": "1110010",
-  "1": "1100110",
-  "2": "1101100",
-  "3": "1000010",
-  "4": "1011100",
-  "5": "1001110",
-  "6": "1010000",
-  "7": "1000100",
-  "8": "1001000",
-  "9": "1110100",
-};
-
-function encodeEan13(value: string) {
-  if (!/^\d{13}$/.test(value)) {
-    throw new Error("รูปแบบ EAN-13 ไม่ถูกต้อง");
-  }
-  const digits = value.split("");
-  const parity = PARITY_TABLE[digits[0]];
-  let pattern = "101"; // start guard
-  for (let i = 1; i <= 6; i += 1) {
-    const digit = digits[i];
-    const mode = parity[i - 1] as "L" | "G";
-    pattern += mode === "L" ? L_CODES[digit] : G_CODES[digit];
-  }
-  pattern += "01010"; // center guard
-  for (let i = 7; i < 13; i += 1) {
-    const digit = digits[i];
-    pattern += R_CODES[digit];
-  }
-  pattern += "101";
-  return pattern.split("").map((char) => Number(char));
-}
-
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: "#f5f7fb" },
   centered: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24, backgroundColor: "#fff" },
@@ -467,29 +316,6 @@ const styles = StyleSheet.create({
   trackingRow: { flexDirection: "row", alignItems: "flex-end", gap: 16 },
   inputWrapper: { flex: 1 },
   input: { backgroundColor: "#f1f4fb", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, color: "#1f2937" },
-  previewCard: { backgroundColor: "#fff", borderRadius: 18, marginBottom: 20, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 8, elevation: 2, overflow: "hidden" },
-  previewHeader: { padding: 18, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#e1e7f0" },
-  previewTitle: { fontSize: 18, fontWeight: "700", color: "#1f2937" },
-  previewSubtitle: { marginTop: 4, color: "#6b7280" },
-  previewBody: { padding: 18 },
-  previewTableHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 24 },
-  previewTableTitle: { fontSize: 16, fontWeight: "600", color: "#1f2937" },
-  previewTableFilter: { fontSize: 13, color: "#9aa3b5" },
-  previewEmpty: { borderWidth: 1, borderStyle: "dashed", borderColor: "#d1d9e6", borderRadius: 12, padding: 24, alignItems: "center" },
-  previewEmptyText: { color: "#9aa3b5" },
-  barcodeCard: { backgroundColor: "#fff", borderRadius: 18, padding: 20, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 8, elevation: 2, marginBottom: 20 },
-  sectionTitle: { fontSize: 18, fontWeight: "700", color: "#1f2937" },
-  sectionHelp: { color: "#6b7280", marginTop: 4, marginBottom: 16 },
-  barcodeBox: { backgroundColor: "#fefefe", borderRadius: 16, paddingVertical: 24, paddingHorizontal: 16, alignItems: "center", borderWidth: 1, borderColor: "#e5e7eb" },
-  barcodeStripRow: { flexDirection: "row", height: 140, alignItems: "center" },
-  barcodeStrip: { width: 2, height: "100%" },
-  barcodeBlack: { backgroundColor: "#111" },
-  barcodeWhite: { backgroundColor: "#fff" },
-  barcodeDigitsRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 12, gap: 12 },
-  barcodeLeftDigit: { fontSize: 18, fontWeight: "600", letterSpacing: 2 },
-  barcodeGroup: { flexDirection: "row", gap: 6 },
-  barcodeDigit: { fontSize: 18, fontWeight: "600", letterSpacing: 2 },
-  barcodeCaption: { marginTop: 12, color: "#6b7280" },
   cameraSheet: { backgroundColor: "#f9fafc", borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 20, paddingTop: 24 },
   cameraHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 },
   cameraTitle: { fontSize: 18, fontWeight: "700", color: "#1f2937" },
