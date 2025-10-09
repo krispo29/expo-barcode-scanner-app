@@ -50,6 +50,7 @@ export default function IndexScreen() {
   const [history, setHistory] = useState<ScanRecord[]>([]);
   const [lastStatus, setLastStatus] = useState<string>("-");
   const [isScanning, setIsScanning] = useState(true);
+  const [historyFullScreen, setHistoryFullScreen] = useState(false);
 
   const cameraRef = useRef<CameraView>(null);
   const unlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -59,6 +60,7 @@ export default function IndexScreen() {
   const panelCurrent = useRef(0);
   const [panelExpanded, setPanelExpanded] = useState(false);
   const previousScanningState = useRef(true);
+  const historyPanelState = useRef<boolean | null>(null);
 
   const safeAreaHeight = screenHeight - insets.top - insets.bottom;
   const headerApproxHeight = 80;
@@ -146,6 +148,112 @@ export default function IndexScreen() {
   const togglePanel = useCallback(() => {
     applyPanelState(!panelExpanded);
   }, [applyPanelState, panelExpanded]);
+
+  const renderHistoryRecords = useCallback(
+    (records: ScanRecord[]) =>
+      records.map((item) => {
+        const scanTime = new Date(item.scannedAt);
+        const now = new Date();
+        const diffMinutes = Math.floor(
+          (now.getTime() - scanTime.getTime()) / (1000 * 60)
+        );
+
+        let timeText = "";
+        if (diffMinutes < 1) {
+          timeText = "เมื่อสักครู่";
+        } else if (diffMinutes < 60) {
+          timeText = `${diffMinutes} นาทีที่แล้ว`;
+        } else if (diffMinutes < 1440) {
+          const hours = Math.floor(diffMinutes / 60);
+          timeText = `${hours} ชั่วโมงที่แล้ว`;
+        } else {
+          timeText = scanTime.toLocaleDateString("th-TH", {
+            day: "numeric",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+        }
+        const historyIndex = history.findIndex((record) => record.id === item.id);
+        const displayOrder = historyIndex >= 0 ? history.length - historyIndex : 0;
+        const isLatest = historyIndex === 0;
+
+        return (
+          <View
+            key={item.id}
+            style={[styles.historyItem, isLatest && styles.historyItemLatest]}
+          >
+            <View style={styles.historyLeft}>
+              <View
+                style={[styles.historyIcon, isLatest && styles.historyIconLatest]}
+              >
+                <Text style={styles.historyIconText}>
+                  {isLatest ? "🆕" : "📦"}
+                </Text>
+              </View>
+              <View style={styles.historyNumber}>
+                <Text style={styles.historyNumberText}>#{displayOrder}</Text>
+              </View>
+            </View>
+
+            <View style={styles.historyContent}>
+              <View style={styles.historyHeader}>
+                <Text style={styles.historyCode}>{item.code}</Text>
+                <View
+                  style={[
+                    styles.historyBadge,
+                    item.mode === "auto"
+                      ? styles.historyBadgeAuto
+                      : styles.historyBadgeManual,
+                  ]}
+                >
+                  <Text style={styles.historyBadgeText}>
+                    {item.mode === "auto" ? "AUTO" : "MANUAL"}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.historyDetails}>
+                <Text style={styles.historyCustomer}>
+                  👤{" "}
+                  {CUSTOMERS.find((c) => c.id === item.customerId)?.name ||
+                    item.customerId}
+                </Text>
+                <Text style={styles.historyTime}>🕐 {timeText}</Text>
+                <Text style={styles.historyDateTime}>
+                  📅{" "}
+                  {scanTime.toLocaleString("th-TH", {
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })}
+                </Text>
+              </View>
+            </View>
+          </View>
+        );
+      }),
+    [history]
+  );
+
+  const openHistoryFullScreen = useCallback(() => {
+    historyPanelState.current = panelExpanded;
+    if (!panelExpanded) {
+      applyPanelState(true);
+    }
+    setHistoryFullScreen(true);
+  }, [applyPanelState, panelExpanded]);
+
+  const closeHistoryFullScreen = useCallback(() => {
+    setHistoryFullScreen(false);
+    if (historyPanelState.current === false) {
+      applyPanelState(false);
+    }
+    historyPanelState.current = null;
+  }, [applyPanelState]);
 
   const panResponder = useMemo(() => {
     const gestureRange = Math.max(collapsedCameraHeight, 1);
@@ -515,7 +623,15 @@ export default function IndexScreen() {
           <View style={[styles.section, styles.historySection]}>
             <View style={styles.statusHeader}>
               <Text style={styles.sectionTitle}>ประวัติการสแกน</Text>
-              <Text style={styles.historyCount}>{history.length} รายการ</Text>
+              <View style={styles.historyHeaderActions}>
+                <Text style={styles.historyCount}>{history.length} รายการ</Text>
+                <TouchableOpacity
+                  style={styles.historyExpandButton}
+                  onPress={openHistoryFullScreen}
+                >
+                  <Text style={styles.historyExpandButtonText}>ขยาย</Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             {lastStatus !== "-" && (
@@ -542,102 +658,7 @@ export default function IndexScreen() {
                   contentContainerStyle={styles.historyScrollContent}
                   showsVerticalScrollIndicator={false}
                 >
-                  {visibleHistory.map((item) => {
-                    const scanTime = new Date(item.scannedAt);
-                    const now = new Date();
-                    const diffMinutes = Math.floor(
-                      (now.getTime() - scanTime.getTime()) / (1000 * 60)
-                    );
-
-                    let timeText = "";
-                    if (diffMinutes < 1) {
-                      timeText = "เมื่อสักครู่";
-                    } else if (diffMinutes < 60) {
-                      timeText = `${diffMinutes} นาทีที่แล้ว`;
-                    } else if (diffMinutes < 1440) {
-                      const hours = Math.floor(diffMinutes / 60);
-                      timeText = `${hours} ชั่วโมงที่แล้ว`;
-                    } else {
-                      timeText = scanTime.toLocaleDateString("th-TH", {
-                        day: "numeric",
-                        month: "short",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      });
-                    }
-                    const historyIndex = history.findIndex(
-                      (record) => record.id === item.id
-                    );
-                    const displayOrder =
-                      historyIndex >= 0 ? history.length - historyIndex : 0;
-                    const isLatest = historyIndex === 0;
-
-                    return (
-                      <View
-                        key={item.id}
-                        style={[
-                          styles.historyItem,
-                          isLatest && styles.historyItemLatest,
-                        ]}
-                      >
-                        <View style={styles.historyLeft}>
-                          <View
-                            style={[
-                              styles.historyIcon,
-                              isLatest && styles.historyIconLatest,
-                            ]}
-                          >
-                            <Text style={styles.historyIconText}>
-                              {isLatest ? "🆕" : "📦"}
-                            </Text>
-                          </View>
-                          <View style={styles.historyNumber}>
-                            <Text style={styles.historyNumberText}>
-                              #{displayOrder}
-                            </Text>
-                          </View>
-                        </View>
-
-                        <View style={styles.historyContent}>
-                          <View style={styles.historyHeader}>
-                            <Text style={styles.historyCode}>{item.code}</Text>
-                            <View
-                              style={[
-                                styles.historyBadge,
-                                item.mode === "auto"
-                                  ? styles.historyBadgeAuto
-                                  : styles.historyBadgeManual,
-                              ]}
-                            >
-                              <Text style={styles.historyBadgeText}>
-                                {item.mode === "auto" ? "AUTO" : "MANUAL"}
-                              </Text>
-                            </View>
-                          </View>
-
-                          <View style={styles.historyDetails}>
-                            <Text style={styles.historyCustomer}>
-                              👤{" "}
-                              {CUSTOMERS.find((c) => c.id === item.customerId)
-                                ?.name || item.customerId}
-                            </Text>
-                            <Text style={styles.historyTime}>🕐 {timeText}</Text>
-                            <Text style={styles.historyDateTime}>
-                              📅{" "}
-                              {scanTime.toLocaleString("th-TH", {
-                                year: "numeric",
-                                month: "2-digit",
-                                day: "2-digit",
-                                hour: "2-digit",
-                                minute: "2-digit",
-                                second: "2-digit",
-                              })}
-                            </Text>
-                          </View>
-                        </View>
-                      </View>
-                    );
-                  })}
+                  {renderHistoryRecords(visibleHistory)}
 
                   {!showingAllHistory && (
                     <View style={styles.historyMore}>
@@ -652,6 +673,45 @@ export default function IndexScreen() {
           </View>
         </View>
       </Animated.View>
+
+      {historyFullScreen && (
+        <View
+          style={[
+            styles.historyFullScreenOverlay,
+            {
+              paddingTop: insets.top + 16,
+              paddingBottom: insets.bottom + 20,
+            },
+          ]}
+        >
+          <View style={styles.historyFullScreenHeader}>
+            <Text style={styles.historyFullScreenTitle}>ประวัติการสแกน</Text>
+            <TouchableOpacity
+              onPress={closeHistoryFullScreen}
+              style={styles.historyFullScreenClose}
+            >
+              <Text style={styles.historyFullScreenCloseText}>ปิดเต็มจอ</Text>
+            </TouchableOpacity>
+          </View>
+          {history.length === 0 ? (
+            <View style={styles.historyFullScreenEmpty}>
+              <Text style={styles.emptyHistoryIcon}>📋</Text>
+              <Text style={styles.emptyHistoryText}>ยังไม่มีประวัติการสแกน</Text>
+              <Text style={styles.emptyHistorySubtext}>
+                เริ่มสแกนบาร์โค้ดเพื่อดูประวัติ
+              </Text>
+            </View>
+          ) : (
+            <ScrollView
+              style={styles.historyFullScreenScroll}
+              contentContainerStyle={styles.historyScrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {renderHistoryRecords(history)}
+            </ScrollView>
+          )}
+        </View>
+      )}
     </View>
   );
 }
@@ -1025,10 +1085,26 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 12,
   },
+  historyHeaderActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   historyCount: {
     fontSize: 14,
     color: "#6B7280",
     fontWeight: "500",
+  },
+  historyExpandButton: {
+    backgroundColor: "#3B82F6",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  historyExpandButtonText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "600",
   },
   statusCard: {
     backgroundColor: "#EBF4FF",
@@ -1087,6 +1163,47 @@ const styles = StyleSheet.create({
   },
   historyScrollContent: {
     paddingBottom: 16,
+  },
+  historyFullScreenOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(17, 24, 39, 0.96)",
+    paddingHorizontal: 20,
+    zIndex: 50,
+  },
+  historyFullScreenHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  historyFullScreenTitle: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
+  historyFullScreenClose: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.14)",
+  },
+  historyFullScreenCloseText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  historyFullScreenScroll: {
+    flex: 1,
+  },
+  historyFullScreenEmpty: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12,
   },
   historyItem: {
     flexDirection: "row",
