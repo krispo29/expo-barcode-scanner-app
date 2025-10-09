@@ -4,11 +4,12 @@ import {
   useCameraPermissions,
 } from "expo-camera";
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Animated,
   Dimensions,
+  PanResponder,
   Platform,
   ScrollView,
   StyleSheet,
@@ -54,6 +55,37 @@ export default function IndexScreen() {
   const unlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
   const scanAnimation = useRef(new Animated.Value(0)).current;
+  const panelAnimation = useRef(new Animated.Value(0)).current;
+  const panelCurrent = useRef(0);
+  const [panelExpanded, setPanelExpanded] = useState(false);
+  const previousScanningState = useRef(true);
+
+  const safeAreaHeight = screenHeight - insets.top - insets.bottom;
+  const headerApproxHeight = 80;
+  const collapsedCameraHeight = Math.min(screenHeight * 0.42, screenWidth + 80);
+  const maxPanelHeightAvailable = Math.max(
+    0,
+    safeAreaHeight - headerApproxHeight - 16
+  );
+  const desiredCollapsedHeight =
+    safeAreaHeight - headerApproxHeight - collapsedCameraHeight;
+  const collapsedPanelHeight = Math.max(
+    Math.min(desiredCollapsedHeight, maxPanelHeightAvailable),
+    Math.min(320, maxPanelHeightAvailable)
+  );
+  const expandedPanelHeight = Math.max(
+    collapsedPanelHeight,
+    maxPanelHeightAvailable
+  );
+
+  useEffect(() => {
+    const id = panelAnimation.addListener(({ value }) => {
+      panelCurrent.current = value;
+    });
+    return () => {
+      panelAnimation.removeListener(id);
+    };
+  }, [panelAnimation]);
 
   useEffect(() => {
     if (!permission) {
@@ -88,6 +120,91 @@ export default function IndexScreen() {
       if (unlockTimer.current) clearTimeout(unlockTimer.current);
     };
   }, [isScanning, scanAnimation]);
+
+  const applyPanelState = useCallback(
+    (expand: boolean) => {
+      panelAnimation.stopAnimation();
+      setPanelExpanded(expand);
+      Animated.timing(panelAnimation, {
+        toValue: expand ? 1 : 0,
+        duration: 260,
+        useNativeDriver: false,
+      }).start();
+
+      if (expand) {
+        previousScanningState.current = isScanning;
+        if (isScanning) {
+          setIsScanning(false);
+        }
+      } else if (previousScanningState.current) {
+        setIsScanning(true);
+      }
+    },
+    [isScanning, panelAnimation]
+  );
+
+  const togglePanel = useCallback(() => {
+    applyPanelState(!panelExpanded);
+  }, [applyPanelState, panelExpanded]);
+
+  const panResponder = useMemo(() => {
+    const gestureRange = Math.max(collapsedCameraHeight, 1);
+
+    return PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gesture) => {
+        if (Math.abs(gesture.dy) < 6) return false;
+        return Math.abs(gesture.dy) > Math.abs(gesture.dx);
+      },
+      onPanResponderGrant: () => {
+        panelAnimation.stopAnimation();
+      },
+      onPanResponderMove: (_, gesture) => {
+        const nextValue = clamp(
+          panelCurrent.current - gesture.dy / gestureRange,
+          0,
+          1
+        );
+        panelAnimation.setValue(nextValue);
+      },
+      onPanResponderRelease: (_, gesture) => {
+        const velocity = gesture.vy;
+        const value = panelCurrent.current;
+        let expand = panelExpanded;
+
+        if (velocity < -0.5) {
+          expand = true;
+        } else if (velocity > 0.5) {
+          expand = false;
+        } else {
+          expand = value > 0.5;
+        }
+
+        applyPanelState(expand);
+      },
+      onPanResponderTerminate: () => {
+        applyPanelState(panelCurrent.current > 0.5);
+      },
+    });
+  }, [applyPanelState, collapsedCameraHeight, panelAnimation, panelExpanded]);
+
+  const cameraHeight = panelAnimation.interpolate({
+    inputRange: [0, 1],
+    outputRange: [collapsedCameraHeight, 0],
+    extrapolate: "clamp",
+  });
+  const cameraOpacity = panelAnimation.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0],
+    extrapolate: "clamp",
+  });
+  const panelHeight = panelAnimation.interpolate({
+    inputRange: [0, 1],
+    outputRange: [collapsedPanelHeight, expandedPanelHeight],
+    extrapolate: "clamp",
+  });
+
+  const visibleHistory = panelExpanded ? history : history.slice(0, 10);
+  const showingAllHistory = panelExpanded || history.length <= 10;
 
   const handleDetected = useCallback(
     async (rawValue: string, mode: "auto" | "manual") => {
@@ -124,7 +241,7 @@ export default function IndexScreen() {
           scannedAt: new Date().toISOString(),
           mode,
         };
-        setHistory((prev) => [record, ...prev].slice(0, 15));
+        setHistory((prev) => [record, ...prev].slice(0, 30));
         setLastStatus(`${normalized} • ${customer.name}`);
         setInput(normalized);
       } catch (error: any) {
@@ -214,8 +331,13 @@ export default function IndexScreen() {
             style={[
               styles.headerButton,
               isScanning && styles.headerButtonActive,
+              panelExpanded && styles.headerButtonDisabled,
             ]}
-            onPress={() => setIsScanning(!isScanning)}
+            onPress={() => {
+              if (panelExpanded) return;
+              setIsScanning(!isScanning);
+            }}
+            disabled={panelExpanded}
           >
             <Text
               style={[
@@ -230,7 +352,12 @@ export default function IndexScreen() {
       </View>
 
       {/* Camera Section */}
-      <View style={styles.cameraContainer}>
+      <Animated.View
+        style={[
+          styles.cameraContainer,
+          { height: cameraHeight, opacity: cameraOpacity },
+        ]}
+      >
         <View style={styles.cameraFrame}>
           <CameraView
             ref={cameraRef}
@@ -277,224 +404,254 @@ export default function IndexScreen() {
             </View>
           </View>
         </View>
-      </View>
+      </Animated.View>
 
       {/* Controls Panel */}
-      <View
-        style={[styles.controlsPanel, { paddingBottom: insets.bottom + 20 }]}
+      <Animated.View
+        style={[
+          styles.controlsPanel,
+          { paddingBottom: insets.bottom + 20 },
+          { height: panelHeight },
+        ]}
       >
-        {/* Customer Selection */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>ลูกค้า</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.customerScroll}
+        <View style={styles.panelHandleWrapper} {...panResponder.panHandlers}>
+          <TouchableOpacity
+            onPress={togglePanel}
+            activeOpacity={0.8}
+            style={styles.panelHandleTouch}
           >
-            {CUSTOMERS.map((item) => (
-              <TouchableOpacity
-                key={item.id}
-                style={[
-                  styles.customerCard,
-                  item.id === customer.id && styles.customerCardActive,
-                ]}
-                onPress={() => setCustomer(item)}
-              >
-                <Text
-                  style={[
-                    styles.customerCardTitle,
-                    item.id === customer.id && styles.customerCardTitleActive,
-                  ]}
-                >
-                  {item.name}
-                </Text>
-                <Text
-                  style={[
-                    styles.customerCardSubtitle,
-                    item.id === customer.id &&
-                      styles.customerCardSubtitleActive,
-                  ]}
-                >
-                  {item.description}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+            <View style={styles.panelHandle} />
+            <Text style={styles.panelHandleText}>
+              {panelExpanded
+                ? "แตะเพื่อเปิดกล้องอีกครั้ง"
+                : "เลื่อนขึ้นเพื่อดูประวัติเพิ่มเติม"}
+            </Text>
+          </TouchableOpacity>
         </View>
 
-        {/* Manual Input & Settings */}
-        <View style={styles.section}>
-          <View style={styles.inputSection}>
-            <View style={styles.inputHeader}>
-              <Text style={styles.sectionTitle}>Tracking Number</Text>
-              <View style={styles.autoToggle}>
-                <Text style={styles.toggleLabel}>Auto</Text>
-                <Switch
-                  value={autoEnter}
-                  onValueChange={setAutoEnter}
-                  trackColor={{ false: "#E5E7EB", true: "#3B82F6" }}
-                  thumbColor={autoEnter ? "#FFFFFF" : "#9CA3AF"}
-                />
-              </View>
-            </View>
-
-            <View style={styles.inputRow}>
-              <TextInput
-                value={input}
-                onChangeText={setInput}
-                placeholder="กรอกหรือสแกน Tracking No."
-                style={styles.trackingInput}
-                keyboardType="default"
-                returnKeyType="done"
-                placeholderTextColor="#9CA3AF"
-              />
-              {!autoEnter && (
-                <TouchableOpacity
-                  onPress={() => handleDetected(input, "manual")}
-                  style={[
-                    styles.submitButton,
-                    !input.trim() && styles.submitButtonDisabled,
-                  ]}
-                  disabled={!input.trim()}
-                >
-                  <Text style={styles.submitButtonText}>✓</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        </View>
-
-        {/* Status & History */}
-        <View style={styles.section}>
-          <View style={styles.statusHeader}>
-            <Text style={styles.sectionTitle}>ประวัติการสแกน</Text>
-            <Text style={styles.historyCount}>{history.length} รายการ</Text>
-          </View>
-
-          {lastStatus !== "-" && (
-            <View style={styles.statusCard}>
-              <Text style={styles.statusLabel}>สแกนล่าสุด:</Text>
-              <Text style={styles.statusText}>{lastStatus}</Text>
-            </View>
-          )}
-
-          {history.length === 0 ? (
-            <View style={styles.emptyHistory}>
-              <Text style={styles.emptyHistoryIcon}>📋</Text>
-              <Text style={styles.emptyHistoryText}>
-                ยังไม่มีประวัติการสแกน
-              </Text>
-              <Text style={styles.emptyHistorySubtext}>
-                เริ่มสแกนบาร์โค้ดเพื่อดูประวัติ
-              </Text>
-            </View>
-          ) : (
+        <View style={styles.controlsContent}>
+          {/* Customer Selection */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>ลูกค้า</Text>
             <ScrollView
-              style={styles.historyScroll}
-              showsVerticalScrollIndicator={false}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.customerScroll}
             >
-              {history.slice(0, 10).map((item, index) => {
-                const scanTime = new Date(item.scannedAt);
-                const now = new Date();
-                const diffMinutes = Math.floor(
-                  (now.getTime() - scanTime.getTime()) / (1000 * 60)
-                );
-
-                let timeText = "";
-                if (diffMinutes < 1) {
-                  timeText = "เมื่อสักครู่";
-                } else if (diffMinutes < 60) {
-                  timeText = `${diffMinutes} นาทีที่แล้ว`;
-                } else if (diffMinutes < 1440) {
-                  const hours = Math.floor(diffMinutes / 60);
-                  timeText = `${hours} ชั่วโมงที่แล้ว`;
-                } else {
-                  timeText = scanTime.toLocaleDateString("th-TH", {
-                    day: "numeric",
-                    month: "short",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  });
-                }
-
-                return (
-                  <View
-                    key={item.id}
+              {CUSTOMERS.map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={[
+                    styles.customerCard,
+                    item.id === customer.id && styles.customerCardActive,
+                  ]}
+                  onPress={() => setCustomer(item)}
+                >
+                  <Text
                     style={[
-                      styles.historyItem,
-                      index === 0 && styles.historyItemLatest,
+                      styles.customerCardTitle,
+                      item.id === customer.id && styles.customerCardTitleActive,
                     ]}
                   >
-                    <View style={styles.historyLeft}>
+                    {item.name}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.customerCardSubtitle,
+                      item.id === customer.id &&
+                        styles.customerCardSubtitleActive,
+                    ]}
+                  >
+                    {item.description}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+
+          {/* Manual Input & Settings */}
+          <View style={styles.section}>
+            <View style={styles.inputSection}>
+              <View style={styles.inputHeader}>
+                <Text style={styles.sectionTitle}>Tracking Number</Text>
+                <View style={styles.autoToggle}>
+                  <Text style={styles.toggleLabel}>Auto</Text>
+                  <Switch
+                    value={autoEnter}
+                    onValueChange={setAutoEnter}
+                    trackColor={{ false: "#E5E7EB", true: "#3B82F6" }}
+                    thumbColor={autoEnter ? "#FFFFFF" : "#9CA3AF"}
+                  />
+                </View>
+              </View>
+
+              <View style={styles.inputRow}>
+                <TextInput
+                  value={input}
+                  onChangeText={setInput}
+                  placeholder="กรอกหรือสแกน Tracking No."
+                  style={styles.trackingInput}
+                  keyboardType="default"
+                  returnKeyType="done"
+                  placeholderTextColor="#9CA3AF"
+                />
+                {!autoEnter && (
+                  <TouchableOpacity
+                    onPress={() => handleDetected(input, "manual")}
+                    style={[
+                      styles.submitButton,
+                      !input.trim() && styles.submitButtonDisabled,
+                    ]}
+                    disabled={!input.trim()}
+                  >
+                    <Text style={styles.submitButtonText}>✓</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          </View>
+
+          {/* Status & History */}
+          <View style={[styles.section, styles.historySection]}>
+            <View style={styles.statusHeader}>
+              <Text style={styles.sectionTitle}>ประวัติการสแกน</Text>
+              <Text style={styles.historyCount}>{history.length} รายการ</Text>
+            </View>
+
+            {lastStatus !== "-" && (
+              <View style={styles.statusCard}>
+                <Text style={styles.statusLabel}>สแกนล่าสุด:</Text>
+                <Text style={styles.statusText}>{lastStatus}</Text>
+              </View>
+            )}
+
+            {history.length === 0 ? (
+              <View style={styles.emptyHistory}>
+                <Text style={styles.emptyHistoryIcon}>📋</Text>
+                <Text style={styles.emptyHistoryText}>
+                  ยังไม่มีประวัติการสแกน
+                </Text>
+                <Text style={styles.emptyHistorySubtext}>
+                  เริ่มสแกนบาร์โค้ดเพื่อดูประวัติ
+                </Text>
+              </View>
+            ) : (
+              <View style={styles.historyListWrapper}>
+                <ScrollView
+                  style={styles.historyScroll}
+                  contentContainerStyle={styles.historyScrollContent}
+                  showsVerticalScrollIndicator={false}
+                >
+                  {visibleHistory.map((item) => {
+                    const scanTime = new Date(item.scannedAt);
+                    const now = new Date();
+                    const diffMinutes = Math.floor(
+                      (now.getTime() - scanTime.getTime()) / (1000 * 60)
+                    );
+
+                    let timeText = "";
+                    if (diffMinutes < 1) {
+                      timeText = "เมื่อสักครู่";
+                    } else if (diffMinutes < 60) {
+                      timeText = `${diffMinutes} นาทีที่แล้ว`;
+                    } else if (diffMinutes < 1440) {
+                      const hours = Math.floor(diffMinutes / 60);
+                      timeText = `${hours} ชั่วโมงที่แล้ว`;
+                    } else {
+                      timeText = scanTime.toLocaleDateString("th-TH", {
+                        day: "numeric",
+                        month: "short",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      });
+                    }
+                    const historyIndex = history.findIndex(
+                      (record) => record.id === item.id
+                    );
+                    const displayOrder =
+                      historyIndex >= 0 ? history.length - historyIndex : 0;
+                    const isLatest = historyIndex === 0;
+
+                    return (
                       <View
+                        key={item.id}
                         style={[
-                          styles.historyIcon,
-                          index === 0 && styles.historyIconLatest,
+                          styles.historyItem,
+                          isLatest && styles.historyItemLatest,
                         ]}
                       >
-                        <Text style={styles.historyIconText}>
-                          {index === 0 ? "🆕" : "📦"}
-                        </Text>
-                      </View>
-                      <View style={styles.historyNumber}>
-                        <Text style={styles.historyNumberText}>
-                          #{history.length - index}
-                        </Text>
-                      </View>
-                    </View>
+                        <View style={styles.historyLeft}>
+                          <View
+                            style={[
+                              styles.historyIcon,
+                              isLatest && styles.historyIconLatest,
+                            ]}
+                          >
+                            <Text style={styles.historyIconText}>
+                              {isLatest ? "🆕" : "📦"}
+                            </Text>
+                          </View>
+                          <View style={styles.historyNumber}>
+                            <Text style={styles.historyNumberText}>
+                              #{displayOrder}
+                            </Text>
+                          </View>
+                        </View>
 
-                    <View style={styles.historyContent}>
-                      <View style={styles.historyHeader}>
-                        <Text style={styles.historyCode}>{item.code}</Text>
-                        <View
-                          style={[
-                            styles.historyBadge,
-                            item.mode === "auto"
-                              ? styles.historyBadgeAuto
-                              : styles.historyBadgeManual,
-                          ]}
-                        >
-                          <Text style={styles.historyBadgeText}>
-                            {item.mode === "auto" ? "AUTO" : "MANUAL"}
-                          </Text>
+                        <View style={styles.historyContent}>
+                          <View style={styles.historyHeader}>
+                            <Text style={styles.historyCode}>{item.code}</Text>
+                            <View
+                              style={[
+                                styles.historyBadge,
+                                item.mode === "auto"
+                                  ? styles.historyBadgeAuto
+                                  : styles.historyBadgeManual,
+                              ]}
+                            >
+                              <Text style={styles.historyBadgeText}>
+                                {item.mode === "auto" ? "AUTO" : "MANUAL"}
+                              </Text>
+                            </View>
+                          </View>
+
+                          <View style={styles.historyDetails}>
+                            <Text style={styles.historyCustomer}>
+                              👤{" "}
+                              {CUSTOMERS.find((c) => c.id === item.customerId)
+                                ?.name || item.customerId}
+                            </Text>
+                            <Text style={styles.historyTime}>🕐 {timeText}</Text>
+                            <Text style={styles.historyDateTime}>
+                              📅{" "}
+                              {scanTime.toLocaleString("th-TH", {
+                                year: "numeric",
+                                month: "2-digit",
+                                day: "2-digit",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                                second: "2-digit",
+                              })}
+                            </Text>
+                          </View>
                         </View>
                       </View>
+                    );
+                  })}
 
-                      <View style={styles.historyDetails}>
-                        <Text style={styles.historyCustomer}>
-                          👤{" "}
-                          {CUSTOMERS.find((c) => c.id === item.customerId)
-                            ?.name || item.customerId}
-                        </Text>
-                        <Text style={styles.historyTime}>🕐 {timeText}</Text>
-                        <Text style={styles.historyDateTime}>
-                          📅{" "}
-                          {scanTime.toLocaleString("th-TH", {
-                            year: "numeric",
-                            month: "2-digit",
-                            day: "2-digit",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                            second: "2-digit",
-                          })}
-                        </Text>
-                      </View>
+                  {!showingAllHistory && (
+                    <View style={styles.historyMore}>
+                      <Text style={styles.historyMoreText}>
+                        และอีก {history.length - visibleHistory.length} รายการ...
+                      </Text>
                     </View>
-                  </View>
-                );
-              })}
-
-              {history.length > 10 && (
-                <View style={styles.historyMore}>
-                  <Text style={styles.historyMoreText}>
-                    และอีก {history.length - 10} รายการ...
-                  </Text>
-                </View>
-              )}
-            </ScrollView>
-          )}
+                  )}
+                </ScrollView>
+              </View>
+            )}
+          </View>
         </View>
-      </View>
+      </Animated.View>
     </View>
   );
 }
@@ -529,6 +686,10 @@ async function fakeSubmit(payload: SubmitPayload) {
 function normalizeTracking(value: string) {
   const onlyDigits = value.replace(/[^0-9A-Za-z]/g, "");
   return onlyDigits.trim().toUpperCase();
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
 }
 
 const styles = StyleSheet.create({
@@ -623,6 +784,9 @@ const styles = StyleSheet.create({
   headerButtonActive: {
     backgroundColor: "#3B82F6",
   },
+  headerButtonDisabled: {
+    opacity: 0.4,
+  },
   headerButtonText: {
     fontSize: 18,
   },
@@ -632,10 +796,11 @@ const styles = StyleSheet.create({
 
   // Camera
   cameraContainer: {
-    flex: 1,
+    width: "100%",
     justifyContent: "center",
     alignItems: "center",
     paddingHorizontal: 20,
+    overflow: "hidden",
   },
   cameraFrame: {
     width: screenWidth - 40,
@@ -722,9 +887,35 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
-    paddingTop: 24,
+    paddingTop: 16,
     paddingHorizontal: 20,
-    maxHeight: screenHeight * 0.5,
+    width: "100%",
+    overflow: "hidden",
+  },
+  panelHandleWrapper: {
+    alignItems: "center",
+    paddingVertical: 4,
+  },
+  panelHandleTouch: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    width: "100%",
+  },
+  panelHandle: {
+    width: 52,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#E5E7EB",
+    marginBottom: 6,
+  },
+  panelHandleText: {
+    fontSize: 12,
+    color: "#6B7280",
+    fontWeight: "600",
+  },
+  controlsContent: {
+    flex: 1,
   },
   section: {
     marginBottom: 24,
@@ -883,8 +1074,19 @@ const styles = StyleSheet.create({
   },
 
   // History List
+  historySection: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  historyListWrapper: {
+    flex: 1,
+  },
   historyScroll: {
-    maxHeight: 300,
+    flex: 1,
+    flexGrow: 1,
+  },
+  historyScrollContent: {
+    paddingBottom: 16,
   },
   historyItem: {
     flexDirection: "row",
