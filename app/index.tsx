@@ -44,7 +44,11 @@ export default function IndexScreen() {
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const [customer, setCustomer] = useState<Customer>(CUSTOMERS[0]);
+  const [cameraEnabled, setCameraEnabled] = useState(true);
   const [autoEnter, setAutoEnter] = useState(true);
+  const [scanTriggerMode, setScanTriggerMode] = useState<"auto" | "manual">(
+    "auto"
+  );
   const [input, setInput] = useState("");
   const [scannedLock, setScannedLock] = useState(false);
   const [history, setHistory] = useState<ScanRecord[]>([]);
@@ -55,6 +59,7 @@ export default function IndexScreen() {
   const cameraRef = useRef<CameraView>(null);
   const unlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
+  const lastScanRef = useRef({ value: "", timestamp: 0 });
   const scanAnimation = useRef(new Animated.Value(0)).current;
   const panelAnimation = useRef(new Animated.Value(0)).current;
   const panelCurrent = useRef(0);
@@ -62,9 +67,15 @@ export default function IndexScreen() {
   const previousScanningState = useRef(true);
   const historyPanelState = useRef<boolean | null>(null);
 
+  const hasCameraPermission = Boolean(permission?.granted);
   const safeAreaHeight = screenHeight - insets.top - insets.bottom;
   const headerApproxHeight = 80;
-  const collapsedCameraHeight = Math.min(screenHeight * 0.42, screenWidth + 80);
+  const collapsedCameraHeight = useMemo(() => {
+    if (!cameraEnabled || !hasCameraPermission) {
+      return 0;
+    }
+    return Math.min(screenHeight * 0.42, screenWidth + 80);
+  }, [cameraEnabled, hasCameraPermission]);
   const maxPanelHeightAvailable = Math.max(
     0,
     safeAreaHeight - headerApproxHeight - 16
@@ -90,10 +101,20 @@ export default function IndexScreen() {
   }, [panelAnimation]);
 
   useEffect(() => {
+    if (!cameraEnabled) return;
     if (!permission) {
       requestPermission();
     }
-  }, [permission, requestPermission]);
+  }, [cameraEnabled, permission, requestPermission]);
+
+  useEffect(() => {
+    if (!cameraEnabled) {
+      setIsScanning(false);
+      setAutoEnter(true);
+      return;
+    }
+    setIsScanning(scanTriggerMode === "auto");
+  }, [cameraEnabled, scanTriggerMode]);
 
   useEffect(() => {
     // Animate scan line
@@ -135,14 +156,14 @@ export default function IndexScreen() {
 
       if (expand) {
         previousScanningState.current = isScanning;
-        if (isScanning) {
+        if (cameraEnabled && isScanning) {
           setIsScanning(false);
         }
-      } else if (previousScanningState.current) {
+      } else if (cameraEnabled && previousScanningState.current) {
         setIsScanning(true);
       }
     },
-    [isScanning, panelAnimation]
+    [cameraEnabled, isScanning, panelAnimation]
   );
 
   const togglePanel = useCallback(() => {
@@ -313,20 +334,35 @@ export default function IndexScreen() {
 
   const visibleHistory = panelExpanded ? history : history.slice(0, 10);
   const showingAllHistory = panelExpanded || history.length <= 10;
+  const panelHandleMessage = panelExpanded
+    ? cameraEnabled
+      ? "แตะเพื่อเปิดกล้องอีกครั้ง"
+      : "แตะเพื่อกลับสู่หน้าหลัก"
+    : cameraEnabled
+    ? "เลื่อนขึ้นเพื่อดูประวัติเพิ่มเติม"
+    : "เลื่อนขึ้นเพื่อดูประวัติทั้งหมด";
 
   const handleDetected = useCallback(
     async (rawValue: string, mode: "auto" | "manual") => {
-      if (scannedLock) return;
-      setScannedLock(true);
       const normalized = normalizeTracking(rawValue);
       if (!normalized) {
         Alert.alert(
           "ไม่พบ Tracking No.",
           "ข้อมูลที่ได้ว่างเปล่าหรือไม่ใช่ตัวเลข"
         );
-        setScannedLock(false);
         return;
       }
+
+      const now = Date.now();
+      const { value: lastValue, timestamp: lastTimestamp } = lastScanRef.current;
+      if (lastValue === normalized && now - lastTimestamp < 1500) {
+        return;
+      }
+
+      if (scannedLock) return;
+
+      setScannedLock(true);
+      lastScanRef.current = { value: normalized, timestamp: now };
 
       try {
         try {
@@ -369,6 +405,18 @@ export default function IndexScreen() {
       const normalized = normalizeTracking(raw);
       if (!normalized) return;
 
+      const now = Date.now();
+      const { value: lastValue, timestamp: lastTimestamp } = lastScanRef.current;
+      if (lastValue === normalized && now - lastTimestamp < 1500) {
+        return;
+      }
+
+      if (scanTriggerMode === "manual") {
+        setIsScanning(false);
+        handleDetected(normalized, "manual");
+        return;
+      }
+
       if (autoEnter) {
         handleDetected(normalized, "auto");
       } else {
@@ -384,12 +432,28 @@ export default function IndexScreen() {
         unlockTimer.current = setTimeout(() => setScannedLock(false), 600);
       }
     },
-    [autoEnter, customer.name, handleDetected]
+    [autoEnter, customer.name, handleDetected, scanTriggerMode]
   );
 
-  if (!permission) {
+  const handleInputChange = useCallback(
+    (text: string) => {
+      if (autoEnter && /[\r\n]/.test(text)) {
+        const sanitized = text.replace(/[\r\n]/g, "");
+        setInput(sanitized);
+        if (sanitized.trim()) {
+          handleDetected(sanitized, "auto");
+        }
+        return;
+      }
+
+      setInput(text);
+    },
+    [autoEnter, handleDetected]
+  );
+
+  if (cameraEnabled && !permission) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
+      <View style={[styles.container, { paddingTop: insets.top }]}> 
         <StatusBar style="light" />
         <View style={styles.permissionContainer}>
           <View style={styles.permissionIcon}>
@@ -397,14 +461,22 @@ export default function IndexScreen() {
           </View>
           <Text style={styles.permissionTitle}>กำลังตรวจสอบสิทธิ์กล้อง</Text>
           <Text style={styles.permissionSubtitle}>กรุณารอสักครู่...</Text>
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={() => setCameraEnabled(false)}
+          >
+            <Text style={styles.secondaryButtonText}>
+              ใช้งานโหมดสแกนเนอร์ฮาร์ดแวร์แทน
+            </Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
   }
 
-  if (!permission.granted) {
+  if (cameraEnabled && permission && !permission.granted) {
     return (
-      <View style={[styles.container, { paddingTop: insets.top }]}>
+      <View style={[styles.container, { paddingTop: insets.top }]}> 
         <StatusBar style="light" />
         <View style={styles.permissionContainer}>
           <View style={styles.permissionIcon}>
@@ -419,6 +491,14 @@ export default function IndexScreen() {
             onPress={requestPermission}
           >
             <Text style={styles.primaryButtonText}>อนุญาตการใช้กล้อง</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.secondaryButton, { marginTop: 16 }]}
+            onPress={() => setCameraEnabled(false)}
+          >
+            <Text style={styles.secondaryButtonText}>
+              เปลี่ยนเป็นโหมดสแกนเนอร์ฮาร์ดแวร์
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -438,81 +518,179 @@ export default function IndexScreen() {
           <TouchableOpacity
             style={[
               styles.headerButton,
-              isScanning && styles.headerButtonActive,
-              panelExpanded && styles.headerButtonDisabled,
+              !cameraEnabled && styles.headerButtonActive,
             ]}
-            onPress={() => {
-              if (panelExpanded) return;
-              setIsScanning(!isScanning);
-            }}
-            disabled={panelExpanded}
+            onPress={() => setCameraEnabled((prev) => !prev)}
           >
             <Text
               style={[
                 styles.headerButtonText,
-                isScanning && styles.headerButtonTextActive,
+                !cameraEnabled && styles.headerButtonTextActive,
               ]}
             >
-              {isScanning ? "⏸️" : "▶️"}
+              {cameraEnabled ? "📷" : "⌨️"}
             </Text>
           </TouchableOpacity>
+
+          {cameraEnabled && scanTriggerMode === "auto" && (
+            <TouchableOpacity
+              style={[
+                styles.headerButton,
+                isScanning && styles.headerButtonActive,
+                panelExpanded && styles.headerButtonDisabled,
+              ]}
+              onPress={() => {
+                if (panelExpanded) return;
+                setIsScanning(!isScanning);
+              }}
+              disabled={panelExpanded}
+            >
+              <Text
+                style={[
+                  styles.headerButtonText,
+                  isScanning && styles.headerButtonTextActive,
+                ]}
+              >
+                {isScanning ? "⏸️" : "▶️"}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
-      {/* Camera Section */}
-      <Animated.View
-        style={[
-          styles.cameraContainer,
-          { height: cameraHeight, opacity: cameraOpacity },
-        ]}
-      >
-        <View style={styles.cameraFrame}>
-          <CameraView
-            ref={cameraRef}
-            style={StyleSheet.absoluteFill}
-            barcodeScannerSettings={{ barcodeTypes: [...SUPPORTED_TYPES] }}
-            facing="back"
-            onBarcodeScanned={isScanning ? onBarcodeScanned : undefined}
-          />
+      {/* Camera / Hardware Section */}
+      {cameraEnabled && hasCameraPermission ? (
+        <Animated.View
+          style={[
+            styles.cameraContainer,
+            { height: cameraHeight, opacity: cameraOpacity },
+          ]}
+        >
+          <View style={styles.cameraFrame}>
+            <CameraView
+              ref={cameraRef}
+              style={StyleSheet.absoluteFill}
+              barcodeScannerSettings={{ barcodeTypes: [...SUPPORTED_TYPES] }}
+              facing="back"
+              onBarcodeScanned={isScanning ? onBarcodeScanned : undefined}
+            />
 
-          {/* Scan overlay */}
-          <View style={styles.scanOverlay} pointerEvents="none">
-            <View style={styles.scanFrame}>
-              <View style={[styles.corner, styles.topLeft]} />
-              <View style={[styles.corner, styles.topRight]} />
-              <View style={[styles.corner, styles.bottomLeft]} />
-              <View style={[styles.corner, styles.bottomRight]} />
-
-              {/* Animated scan line */}
-              {isScanning && (
-                <Animated.View
+            <View style={styles.scanModeSelector} pointerEvents="box-none">
+              <View style={styles.scanModeToggle}>
+                <TouchableOpacity
                   style={[
-                    styles.scanLine,
-                    {
-                      transform: [
-                        {
-                          translateY: scanAnimation.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [0, 200],
-                          }),
-                        },
-                      ],
-                    },
+                    styles.scanModeOption,
+                    scanTriggerMode === "manual" && styles.scanModeOptionActive,
                   ]}
-                />
-              )}
+                  onPress={() => setScanTriggerMode("manual")}
+                  activeOpacity={0.9}
+                >
+                  <Text
+                    style={[
+                      styles.scanModeOptionText,
+                      scanTriggerMode === "manual" &&
+                        styles.scanModeOptionTextActive,
+                    ]}
+                  >
+                    กดเพื่อสแกน
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.scanModeOption,
+                    scanTriggerMode === "auto" && styles.scanModeOptionActive,
+                  ]}
+                  onPress={() => setScanTriggerMode("auto")}
+                  activeOpacity={0.9}
+                >
+                  <Text
+                    style={[
+                      styles.scanModeOptionText,
+                      scanTriggerMode === "auto" &&
+                        styles.scanModeOptionTextActive,
+                    ]}
+                  >
+                    สแกนอัตโนมัติ
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
-            <View style={styles.scanInstructions}>
-              <Text style={styles.scanInstructionText}>
-                {isScanning
-                  ? "วางบาร์โค้ดในกรอบเพื่อสแกน"
-                  : "กดปุ่มเล่นเพื่อเริ่มสแกน"}
-              </Text>
+            {/* Scan overlay */}
+            <View style={styles.scanOverlay} pointerEvents="none">
+              <View style={styles.scanFrame}>
+                <View style={[styles.corner, styles.topLeft]} />
+                <View style={[styles.corner, styles.topRight]} />
+                <View style={[styles.corner, styles.bottomLeft]} />
+                <View style={[styles.corner, styles.bottomRight]} />
+
+                {/* Animated scan line */}
+                {isScanning && (
+                  <Animated.View
+                    style={[
+                      styles.scanLine,
+                      {
+                        transform: [
+                          {
+                            translateY: scanAnimation.interpolate({
+                              inputRange: [0, 1],
+                              outputRange: [0, 200],
+                            }),
+                          },
+                        ],
+                      },
+                    ]}
+                  />
+                )}
+              </View>
+
+              <View style={styles.scanInstructions}>
+                <Text style={styles.scanInstructionText}>
+                  {scanTriggerMode === "manual"
+                    ? isScanning
+                      ? "กำลังสแกน... ถือให้นิ่งจนกว่าจะสำเร็จ"
+                      : scannedLock
+                      ? "กำลังบันทึกผลลัพธ์ กรุณารอสักครู่"
+                      : "กดปุ่ม \"กดเพื่อสแกน\" เมื่อพร้อมจะสแกน"
+                    : isScanning
+                    ? "วางบาร์โค้ดในกรอบเพื่อสแกน"
+                    : "กดปุ่มเล่นเพื่อเริ่มสแกน"}
+                </Text>
+              </View>
             </View>
+
+            {scanTriggerMode === "manual" && (
+              <TouchableOpacity
+                style={[
+                  styles.manualScanButton,
+                  (isScanning || scannedLock) && styles.manualScanButtonDisabled,
+                ]}
+                onPress={() => setIsScanning(true)}
+                disabled={isScanning || scannedLock}
+              >
+                <Text style={styles.manualScanButtonText}>
+                  {isScanning
+                    ? "กำลังสแกน..."
+                    : scannedLock
+                    ? "กำลังบันทึก..."
+                    : "กดเพื่อสแกน"}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
+        </Animated.View>
+      ) : (
+        <View style={styles.hardwareModeContainer}>
+          <View style={styles.hardwareModeIconWrapper}>
+            <Text style={styles.hardwareModeIcon}>⌨️</Text>
+          </View>
+          <Text style={styles.hardwareModeTitle}>โหมดสแกนเนอร์ฮาร์ดแวร์</Text>
+          <Text style={styles.hardwareModeSubtitle}>
+            เชื่อมต่อเครื่องสแกนหรือใช้อุปกรณ์ที่ส่งข้อมูลแบบคีย์บอร์ด{" "}
+            เมื่อสแกนเสร็จระบบจะเติมข้อมูลให้อัตโนมัติ
+          </Text>
         </View>
-      </Animated.View>
+      )}
 
       {/* Controls Panel */}
       <Animated.View
@@ -530,9 +708,7 @@ export default function IndexScreen() {
           >
             <View style={styles.panelHandle} />
             <Text style={styles.panelHandleText}>
-              {panelExpanded
-                ? "แตะเพื่อเปิดกล้องอีกครั้ง"
-                : "เลื่อนขึ้นเพื่อดูประวัติเพิ่มเติม"}
+              {panelHandleMessage}
             </Text>
           </TouchableOpacity>
         </View>
@@ -577,6 +753,18 @@ export default function IndexScreen() {
             </ScrollView>
           </View>
 
+          {!cameraEnabled && (
+            <View style={[styles.section, styles.hardwareNotice]}>
+              <Text style={styles.hardwareNoticeTitle}>
+                ใช้งานผ่านสแกนเนอร์ฮาร์ดแวร์
+              </Text>
+              <Text style={styles.hardwareNoticeText}>
+                โฟกัสไปที่ช่อง Tracking Number แล้วสแกนที่ตัวเครื่อง{" "}
+                ระบบจะกดบันทึกให้อัตโนมัติเมื่อได้รับข้อมูลครบถ้วน
+              </Text>
+            </View>
+          )}
+
           {/* Manual Input & Settings */}
           <View style={styles.section}>
             <View style={styles.inputSection}>
@@ -596,12 +784,20 @@ export default function IndexScreen() {
               <View style={styles.inputRow}>
                 <TextInput
                   value={input}
-                  onChangeText={setInput}
+                  onChangeText={handleInputChange}
                   placeholder="กรอกหรือสแกน Tracking No."
                   style={styles.trackingInput}
                   keyboardType="default"
                   returnKeyType="done"
                   placeholderTextColor="#9CA3AF"
+                  autoCorrect={false}
+                  blurOnSubmit={false}
+                  onSubmitEditing={() => {
+                    if (!autoEnter) return;
+                    const trimmed = input.trim();
+                    if (!trimmed) return;
+                    handleDetected(trimmed, "auto");
+                  }}
                 />
                 {!autoEnter && (
                   <TouchableOpacity
@@ -809,6 +1005,20 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
   },
+  secondaryButton: {
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 16,
+    alignItems: "center",
+  },
+  secondaryButtonText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "600",
+    textAlign: "center",
+  },
 
   // Header
   header: {
@@ -862,6 +1072,44 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     overflow: "hidden",
   },
+  hardwareModeContainer: {
+    width: "100%",
+    paddingHorizontal: 24,
+    paddingVertical: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(59,130,246,0.18)",
+    borderRadius: 32,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    marginHorizontal: 20,
+  },
+  hardwareModeIconWrapper: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: "rgba(255,255,255,0.15)",
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  hardwareModeIcon: {
+    fontSize: 40,
+  },
+  hardwareModeTitle: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    marginBottom: 8,
+  },
+  hardwareModeSubtitle: {
+    fontSize: 16,
+    color: "#E5E7EB",
+    textAlign: "center",
+    lineHeight: 24,
+    maxWidth: 340,
+  },
   cameraFrame: {
     width: screenWidth - 40,
     height: screenWidth - 40,
@@ -873,6 +1121,36 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     justifyContent: "center",
     alignItems: "center",
+  },
+  scanModeSelector: {
+    position: "absolute",
+    top: 16,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+  },
+  scanModeToggle: {
+    flexDirection: "row",
+    backgroundColor: "rgba(0,0,0,0.55)",
+    borderRadius: 999,
+    padding: 4,
+    gap: 4,
+  },
+  scanModeOption: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+  },
+  scanModeOptionActive: {
+    backgroundColor: "#3B82F6",
+  },
+  scanModeOptionText: {
+    color: "#E5E7EB",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  scanModeOptionTextActive: {
+    color: "#FFFFFF",
   },
   scanFrame: {
     width: 240,
@@ -941,6 +1219,28 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "500",
   },
+  manualScanButton: {
+    position: "absolute",
+    bottom: 24,
+    alignSelf: "center",
+    backgroundColor: "#3B82F6",
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    borderRadius: 999,
+    shadowColor: "#1E3A8A",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  manualScanButtonDisabled: {
+    backgroundColor: "rgba(59,130,246,0.45)",
+  },
+  manualScanButtonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "700",
+  },
 
   // Controls Panel
   controlsPanel: {
@@ -985,6 +1285,24 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#1F2937",
     marginBottom: 12,
+  },
+  hardwareNotice: {
+    backgroundColor: "rgba(59,130,246,0.1)",
+    borderRadius: 20,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: "rgba(59,130,246,0.35)",
+  },
+  hardwareNoticeTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1D4ED8",
+    marginBottom: 8,
+  },
+  hardwareNoticeText: {
+    fontSize: 14,
+    color: "#1F2937",
+    lineHeight: 20,
   },
 
   // Customer Selection
