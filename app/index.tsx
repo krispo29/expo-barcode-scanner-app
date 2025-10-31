@@ -59,6 +59,7 @@ export default function IndexScreen() {
   const cameraRef = useRef<CameraView>(null);
   const unlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
+  const lastScanRef = useRef({ value: "", timestamp: 0 });
   const scanAnimation = useRef(new Animated.Value(0)).current;
   const panelAnimation = useRef(new Animated.Value(0)).current;
   const panelCurrent = useRef(0);
@@ -343,17 +344,25 @@ export default function IndexScreen() {
 
   const handleDetected = useCallback(
     async (rawValue: string, mode: "auto" | "manual") => {
-      if (scannedLock) return;
-      setScannedLock(true);
       const normalized = normalizeTracking(rawValue);
       if (!normalized) {
         Alert.alert(
           "ไม่พบ Tracking No.",
           "ข้อมูลที่ได้ว่างเปล่าหรือไม่ใช่ตัวเลข"
         );
-        setScannedLock(false);
         return;
       }
+
+      const now = Date.now();
+      const { value: lastValue, timestamp: lastTimestamp } = lastScanRef.current;
+      if (lastValue === normalized && now - lastTimestamp < 1500) {
+        return;
+      }
+
+      if (scannedLock) return;
+
+      setScannedLock(true);
+      lastScanRef.current = { value: normalized, timestamp: now };
 
       try {
         try {
@@ -395,6 +404,12 @@ export default function IndexScreen() {
       if (!raw) return;
       const normalized = normalizeTracking(raw);
       if (!normalized) return;
+
+      const now = Date.now();
+      const { value: lastValue, timestamp: lastTimestamp } = lastScanRef.current;
+      if (lastValue === normalized && now - lastTimestamp < 1500) {
+        return;
+      }
 
       if (scanTriggerMode === "manual") {
         setIsScanning(false);
