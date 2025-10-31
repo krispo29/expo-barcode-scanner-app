@@ -46,6 +46,9 @@ export default function IndexScreen() {
   const [customer, setCustomer] = useState<Customer>(CUSTOMERS[0]);
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const [autoEnter, setAutoEnter] = useState(true);
+  const [scanTriggerMode, setScanTriggerMode] = useState<"auto" | "manual">(
+    "auto"
+  );
   const [input, setInput] = useState("");
   const [scannedLock, setScannedLock] = useState(false);
   const [history, setHistory] = useState<ScanRecord[]>([]);
@@ -109,8 +112,8 @@ export default function IndexScreen() {
       setAutoEnter(true);
       return;
     }
-    setIsScanning(true);
-  }, [cameraEnabled]);
+    setIsScanning(scanTriggerMode === "auto");
+  }, [cameraEnabled, scanTriggerMode]);
 
   useEffect(() => {
     // Animate scan line
@@ -393,6 +396,12 @@ export default function IndexScreen() {
       const normalized = normalizeTracking(raw);
       if (!normalized) return;
 
+      if (scanTriggerMode === "manual") {
+        setIsScanning(false);
+        handleDetected(normalized, "manual");
+        return;
+      }
+
       if (autoEnter) {
         handleDetected(normalized, "auto");
       } else {
@@ -408,7 +417,7 @@ export default function IndexScreen() {
         unlockTimer.current = setTimeout(() => setScannedLock(false), 600);
       }
     },
-    [autoEnter, customer.name, handleDetected]
+    [autoEnter, customer.name, handleDetected, scanTriggerMode]
   );
 
   const handleInputChange = useCallback(
@@ -508,7 +517,7 @@ export default function IndexScreen() {
             </Text>
           </TouchableOpacity>
 
-          {cameraEnabled && (
+          {cameraEnabled && scanTriggerMode === "auto" && (
             <TouchableOpacity
               style={[
                 styles.headerButton,
@@ -551,6 +560,47 @@ export default function IndexScreen() {
               onBarcodeScanned={isScanning ? onBarcodeScanned : undefined}
             />
 
+            <View style={styles.scanModeSelector} pointerEvents="box-none">
+              <View style={styles.scanModeToggle}>
+                <TouchableOpacity
+                  style={[
+                    styles.scanModeOption,
+                    scanTriggerMode === "manual" && styles.scanModeOptionActive,
+                  ]}
+                  onPress={() => setScanTriggerMode("manual")}
+                  activeOpacity={0.9}
+                >
+                  <Text
+                    style={[
+                      styles.scanModeOptionText,
+                      scanTriggerMode === "manual" &&
+                        styles.scanModeOptionTextActive,
+                    ]}
+                  >
+                    กดเพื่อสแกน
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.scanModeOption,
+                    scanTriggerMode === "auto" && styles.scanModeOptionActive,
+                  ]}
+                  onPress={() => setScanTriggerMode("auto")}
+                  activeOpacity={0.9}
+                >
+                  <Text
+                    style={[
+                      styles.scanModeOptionText,
+                      scanTriggerMode === "auto" &&
+                        styles.scanModeOptionTextActive,
+                    ]}
+                  >
+                    สแกนอัตโนมัติ
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
             {/* Scan overlay */}
             <View style={styles.scanOverlay} pointerEvents="none">
               <View style={styles.scanFrame}>
@@ -581,12 +631,37 @@ export default function IndexScreen() {
 
               <View style={styles.scanInstructions}>
                 <Text style={styles.scanInstructionText}>
-                  {isScanning
+                  {scanTriggerMode === "manual"
+                    ? isScanning
+                      ? "กำลังสแกน... ถือให้นิ่งจนกว่าจะสำเร็จ"
+                      : scannedLock
+                      ? "กำลังบันทึกผลลัพธ์ กรุณารอสักครู่"
+                      : "กดปุ่ม \"กดเพื่อสแกน\" เมื่อพร้อมจะสแกน"
+                    : isScanning
                     ? "วางบาร์โค้ดในกรอบเพื่อสแกน"
                     : "กดปุ่มเล่นเพื่อเริ่มสแกน"}
                 </Text>
               </View>
             </View>
+
+            {scanTriggerMode === "manual" && (
+              <TouchableOpacity
+                style={[
+                  styles.manualScanButton,
+                  (isScanning || scannedLock) && styles.manualScanButtonDisabled,
+                ]}
+                onPress={() => setIsScanning(true)}
+                disabled={isScanning || scannedLock}
+              >
+                <Text style={styles.manualScanButtonText}>
+                  {isScanning
+                    ? "กำลังสแกน..."
+                    : scannedLock
+                    ? "กำลังบันทึก..."
+                    : "กดเพื่อสแกน"}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         </Animated.View>
       ) : (
@@ -1032,6 +1107,36 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+  scanModeSelector: {
+    position: "absolute",
+    top: 16,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+  },
+  scanModeToggle: {
+    flexDirection: "row",
+    backgroundColor: "rgba(0,0,0,0.55)",
+    borderRadius: 999,
+    padding: 4,
+    gap: 4,
+  },
+  scanModeOption: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+  },
+  scanModeOptionActive: {
+    backgroundColor: "#3B82F6",
+  },
+  scanModeOptionText: {
+    color: "#E5E7EB",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  scanModeOptionTextActive: {
+    color: "#FFFFFF",
+  },
   scanFrame: {
     width: 240,
     height: 240,
@@ -1098,6 +1203,28 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontSize: 14,
     fontWeight: "500",
+  },
+  manualScanButton: {
+    position: "absolute",
+    bottom: 24,
+    alignSelf: "center",
+    backgroundColor: "#3B82F6",
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    borderRadius: 999,
+    shadowColor: "#1E3A8A",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  manualScanButtonDisabled: {
+    backgroundColor: "rgba(59,130,246,0.45)",
+  },
+  manualScanButtonText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "700",
   },
 
   // Controls Panel
