@@ -14,7 +14,13 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.cipherlab.scanbarcodeapp",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "แอพนี้ต้องการใช้กล้องเพื่อสแกนบาร์โค้ดและ QR Code",
+        "NSMicrophoneUsageDescription": "แอพนี้ไม่ได้ใช้ไมโครโฟน แต่จำเป็นสำหรับการใช้กล้อง"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -23,7 +29,18 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.scanbarcodeapp"
+      "package": "com.cipherlab.scanbarcodeapp",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_EXTERNAL_STORAGE",
+        "VIBRATE",
+        "INTERNET",
+        "ACCESS_NETWORK_STATE"
+      ],
+      "allowBackup": false,
+      "hardwareAccelerated": true
     },
     "web": {
       "bundler": "metro",
@@ -35,6 +52,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "56fb717d-362a-47d0-a22d-98020472fd45"
+      }
     }
   }
 }
