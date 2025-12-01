@@ -27,16 +27,30 @@ export default function LoginScreen() {
 
     setLoading(true);
     try {
-      // TODO: เชื่อมต่อ API login ของคุณที่นี่
-      // const response = await axios.post('YOUR_API_URL/login', { email, password });
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+      const endpoint = `${apiUrl}/auth/sign-in`;
+      const payload = { email, password };
       
-      // จำลองการ login
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      console.log("=== Login Request ===");
+      console.log("Endpoint:", endpoint);
+      console.log("Payload:", payload);
+      
+      await axios.post(endpoint, payload);
+
+      // TODO: บันทึก token หรือข้อมูล user ที่ได้จาก API
+      // เช่น await AsyncStorage.setItem('token', response.data.token);
       
       // ถ้า login สำเร็จ ไปหน้า scanner
       router.replace("/scanner");
-    } catch (error) {
-      Alert.alert("เข้าสู่ระบบไม่สำเร็จ", "กรุณาตรวจสอบ Email และ Password");
+    } catch (err) {
+      let errorMessage = "กรุณาตรวจสอบ Email และ Password";
+      if (err && typeof err === "object" && "response" in err) {
+        const axiosError = err as { response?: { data?: { message?: string } } };
+        if (axiosError.response?.data?.message) {
+          errorMessage = axiosError.response.data.message;
+        }
+      }
+      Alert.alert("เข้าสู่ระบบไม่สำเร็จ", errorMessage);
     } finally {
       setLoading(false);
     }
