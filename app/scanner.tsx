@@ -180,7 +180,7 @@ export default function IndexScreen() {
               </View>
               <View style={styles.historyDetails}>
                 <Text style={styles.historyCustomer}>
-                  � "{lotMawbData?.code || item.lotMawbId}
+                  📦 {lotMawbData?.code || item.lotMawbId}
                 </Text>
                 <Text style={styles.historyCustomer}>
                   👤 {customerData?.name || item.customerId}
