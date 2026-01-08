@@ -1,16 +1,18 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
 import {
-    Alert,
-    Image,
-    KeyboardAvoidingView,
-    Platform,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
 } from "react-native";
 
 export default function LoginScreen() {
@@ -27,28 +29,44 @@ export default function LoginScreen() {
 
     setLoading(true);
     try {
+      // เรียก API login ของ SHIP2CU ด้วย FormData
+      const formData = new FormData();
+      formData.append('username', email.trim());
+      formData.append('password', password.trim());
+
       const apiUrl = process.env.EXPO_PUBLIC_API_URL;
       const endpoint = `${apiUrl}/auth/sign-in`;
-      const payload = { email, password };
-      
+
       console.log("=== Login Request ===");
       console.log("Endpoint:", endpoint);
-      console.log("Payload:", payload);
+      console.log("Username:", email.trim());
       
-      await axios.post(endpoint, payload);
+      const response = await axios.post(endpoint, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
 
-      // TODO: บันทึก token หรือข้อมูล user ที่ได้จาก API
-      // เช่น await AsyncStorage.setItem('token', response.data.token);
-      
-      // ถ้า login สำเร็จ ไปหน้า scanner
-      router.replace("/scanner");
-    } catch (err) {
-      let errorMessage = "กรุณาตรวจสอบ Email และ Password";
-      if (err && typeof err === "object" && "response" in err) {
-        const axiosError = err as { response?: { data?: { message?: string } } };
-        if (axiosError.response?.data?.message) {
-          errorMessage = axiosError.response.data.message;
-        }
+      console.log("=== Login Response ===");
+      console.log("Response:", response.data);
+
+      if (response.data && (response.data as any).code === 200) {
+        // บันทึก token และข้อมูล user
+        await AsyncStorage.setItem('access_token', (response.data as any).data.access_token);
+        await AsyncStorage.setItem('user_data', JSON.stringify((response.data as any).data));
+        
+        console.log('Login success:', (response.data as any).data);
+        
+        // ไปหน้า scanner
+        router.replace("/scanner");
+      } else {
+        Alert.alert("เข้าสู่ระบบไม่สำเร็จ", (response.data as any).message || "กรุณาตรวจสอบ Email และ Password");
+      }
+    } catch (error: any) {
+      console.error('Login error:', error);
+      let errorMessage = "เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่อีกครั้ง";
+      if (error?.response?.data?.message) {
+        errorMessage = error.response.data.message;
       }
       Alert.alert("เข้าสู่ระบบไม่สำเร็จ", errorMessage);
     } finally {
@@ -66,13 +84,13 @@ export default function LoginScreen() {
       <View style={styles.loginCard}>
         {/* Logo */}
         <View style={styles.logoContainer}>
-        
+          <View style={styles.logoCircle}>
             <Image
-              source={require("../assets/images/android-chrome-192x192.png")}
+              source={require("../assets/images/icon.png")}
               style={styles.logoImage}
               resizeMode="contain"
             />
-         
+          </View>
         </View>
 
         {/* Title */}

@@ -54,7 +54,9 @@
       "typedRoutes": true
     },
     "extra": {
-      "router": {},
+      "router": {
+        "origin": false
+      },
       "eas": {
         "projectId": "56fb717d-362a-47d0-a22d-98020472fd45"
       }
