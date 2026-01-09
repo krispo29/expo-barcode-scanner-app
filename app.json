@@ -1,15 +1,15 @@
 {
   "expo": {
-    "name": "scan-barcode-app",
+    "name": "SHIP2CU Scanner",
     "slug": "scan-barcode-app",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/icon/android-chrome-512x512.png",
     "scheme": "scanbarcodeapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/splash-icon.png",
+      "image": "./assets/icon/android-chrome-512x512.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -24,23 +24,16 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "foregroundImage": "./assets/icon/android-chrome-512x512.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false,
       "package": "com.cipherlab.scanbarcodeapp",
-      "versionCode": 1,
       "permissions": [
         "CAMERA",
-        "WRITE_EXTERNAL_STORAGE",
-        "READ_EXTERNAL_STORAGE",
         "VIBRATE",
         "INTERNET",
         "ACCESS_NETWORK_STATE"
-      ],
-      "allowBackup": false,
-      "hardwareAccelerated": true
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -58,7 +51,7 @@
         "origin": false
       },
       "eas": {
-        "projectId": "56fb717d-362a-47d0-a22d-98020472fd45"
+        "projectId": "a71ffd90-465e-4cd5-a189-68547ef30743"
       }
     }
   }

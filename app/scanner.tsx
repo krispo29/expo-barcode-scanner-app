@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from "axios";
+import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import {
   useCallback,
@@ -44,6 +45,7 @@ type ScanRecord = {
 
 export default function ScannerScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
 
   // Customer Selection
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -64,6 +66,7 @@ export default function ScannerScreen() {
   const [scannedLock, setScannedLock] = useState(false);
   const [history, setHistory] = useState<ScanRecord[]>([]);
   const [lastStatus, setLastStatus] = useState<string>("-");
+  const [showHeader, setShowHeader] = useState(false);
 
   const unlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
@@ -89,6 +92,16 @@ export default function ScannerScreen() {
   useEffect(() => {
     loadCustomers();
   }, []);
+
+  // Auto-focus tracking input when customer is selected and dropdown is closed
+  useEffect(() => {
+    if (customer && !showCustomerDropdown && inputRef.current) {
+      // Small timeout to ensure UI is ready
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 100);
+    }
+  }, [customer, showCustomerDropdown]);
 
   const loadCustomers = async () => {
     setLoadingCustomers(true);
@@ -130,6 +143,36 @@ export default function ScannerScreen() {
     } finally {
       setLoadingCustomers(false);
     }
+  };
+
+  const handleLogout = async () => {
+    Alert.alert(
+      "ออกจากระบบ",
+      "คุณต้องการออกจากระบบหรือไม่?",
+      [
+        {
+          text: "ยกเลิก",
+          style: "cancel"
+        },
+        {
+          text: "ออกจากระบบ",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              // ลบข้อมูลการเข้าสู่ระบบ
+              await AsyncStorage.removeItem('access_token');
+              await AsyncStorage.removeItem('user_data');
+              
+              // กลับไปหน้า login
+              router.replace("/login");
+            } catch (error) {
+              console.error('Logout error:', error);
+              Alert.alert("เกิดข้อผิดพลาด", "ไม่สามารถออกจากระบบได้");
+            }
+          }
+        }
+      ]
+    );
   };
 
   const normalizeTracking = (value: string): string => {
@@ -219,9 +262,29 @@ export default function ScannerScreen() {
           setLastStatus(`${normalized} • ${customer.name}`);
           setInput(""); // เคลียร์ค่าเก่าหลังสแกนสำเร็จ
           
-          Alert.alert("สแกนสำเร็จ", `Tracking No: ${normalized}\nลูกค้า: ${customer.name}`);
+          
+          
+          Alert.alert("สแกนสำเร็จ", `Tracking No: ${normalized}\nลูกค้า: ${customer.name}`, [
+            { 
+              text: "OK", 
+              onPress: () => {
+                setTimeout(() => {
+                  inputRef.current?.focus();
+                }, 200);
+              }
+            }
+          ]);
         } else {
-          Alert.alert("ไม่พบข้อมูล", (response.data as any).message || "ไม่พบ Tracking Number นี้ในระบบ");
+          Alert.alert("ไม่พบข้อมูล", (response.data as any).message || "ไม่พบ Tracking Number นี้ในระบบ", [
+            { 
+              text: "OK", 
+              onPress: () => {
+                setTimeout(() => {
+                  inputRef.current?.focus();
+                }, 200);
+              }
+            }
+          ]);
         }
       } catch (error: any) {
         console.error('Scan error:', error);
@@ -229,7 +292,16 @@ export default function ScannerScreen() {
         if (error?.response?.data?.message) {
           errorMessage = error.response.data.message;
         }
-        Alert.alert("ตรวจสอบไม่สำเร็จ", errorMessage);
+        Alert.alert("ตรวจสอบไม่สำเร็จ", errorMessage, [
+          { 
+            text: "OK", 
+            onPress: () => {
+              setTimeout(() => {
+                inputRef.current?.focus();
+              }, 200);
+            } 
+          }
+        ]);
       } finally {
         if (unlockTimer.current) clearTimeout(unlockTimer.current);
         unlockTimer.current = setTimeout(() => setScannedLock(false), 900);
@@ -241,18 +313,27 @@ export default function ScannerScreen() {
   // ใช้กับสแกนเนอร์ฮาร์ดแวร์ (RS51 ยิงแล้วส่งตัวอักษร + Enter เข้ามา)
   const handleInputChange = useCallback(
     (text: string) => {
+      // Always sanitize input to prevent newline accumulation
+      const sanitized = text.replaceAll(/[\r\n]/g, "");
+
       if (autoEnter && /[\r\n]/.test(text)) {
-        const sanitized = text.replaceAll(/[\r\n]/g, "");
         setInput(sanitized);
         if (sanitized.trim()) {
           handleDetected(sanitized, "auto");
         }
         return;
       }
-      setInput(text);
+      setInput(sanitized);
     },
     [autoEnter, handleDetected]
   );
+
+  const handleManualSubmit = () => {
+    if (!input.trim() || !canScan) return;
+    // If autoEnter is on, treat Enter key as auto scan (likely from scanner)
+    // If autoEnter is off, it's definitely a manual action
+    handleDetected(input, autoEnter ? "auto" : "manual");
+  };
 
   // Filter customers
   const filteredCustomers = customers.filter(
@@ -266,15 +347,41 @@ export default function ScannerScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar style="light" />
 
+      {/* Header Toggle Button */}
+      <TouchableOpacity
+        style={styles.headerToggleButton}
+        onPress={() => {
+            // Safety: Prevent toggle if a scan just happened (within 500ms)
+            // This prevents the scanner's "Enter" from accidentally clicking the menu 
+            // if focus somehow shifts here.
+            if (Date.now() - lastScanRef.current.timestamp < 500) return;
+            setShowHeader(!showHeader);
+        }}
+      >
+        <Text style={styles.headerToggleText}>
+          {showHeader ? "▲" : "▼"} เมนู
+        </Text>
+      </TouchableOpacity>
+
       {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerContent}>
-          <Text style={styles.headerTitle}>SHIP2CU Scanner</Text>
-          <Text style={styles.headerSubtitle}>
-            สแกนบาร์โค้ดเพื่อตรวจสอบ Tracking Number
-          </Text>
+      {showHeader && (
+        <View style={styles.header}>
+          <View style={styles.headerContent}>
+            <View style={styles.headerLeft}>
+              <Text style={styles.headerTitle}>SHIP2CU Scanner</Text>
+              <Text style={styles.headerSubtitle}>
+                สแกนบาร์โค้ดเพื่อตรวจสอบ Tracking Number
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.logoutButton}
+              onPress={handleLogout}
+            >
+              <Text style={styles.logoutButtonText}>ออกจากระบบ</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      )}
 
       {/* Bottom Panel (Scrollable) */}
       <View
@@ -446,16 +553,12 @@ export default function ScannerScreen() {
                   placeholderTextColor="#9CA3AF"
                   autoCorrect={false}
                   editable={canScan}
-                  onSubmitEditing={() => {
-                    if (!autoEnter || !canScan) return;
-                    const trimmed = input.trim();
-                    if (!trimmed) return;
-                    handleDetected(trimmed, "auto");
-                  }}
+                  blurOnSubmit={false} // Prevent focus loss on scan
+                  onSubmitEditing={autoEnter ? handleManualSubmit : undefined}
                 />
                 {!autoEnter && (
                   <TouchableOpacity
-                    onPress={() => handleDetected(input, "manual")}
+                    onPress={handleManualSubmit}
                     style={[
                       styles.submitButton,
                       (!input.trim() || !canScan) && styles.submitButtonDisabled,
@@ -558,6 +661,19 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#1F2937",
   },
+  headerToggleButton: {
+    backgroundColor: "#374151",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: "#4B5563",
+  },
+  headerToggleText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
   header: {
     backgroundColor: "#374151",
     paddingHorizontal: 20,
@@ -566,7 +682,12 @@ const styles = StyleSheet.create({
     borderBottomColor: "#4B5563",
   },
   headerContent: {
+    flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
+  },
+  headerLeft: {
+    flex: 1,
   },
   headerTitle: {
     fontSize: 20,
@@ -577,6 +698,18 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: 14,
     color: "#D1D5DB",
+  },
+  logoutButton: {
+    backgroundColor: "#EF4444",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 6,
+    marginLeft: 16,
+  },
+  logoutButtonText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#FFFFFF",
   },
   controlsPanel: {
     backgroundColor: "#F9FAFB",

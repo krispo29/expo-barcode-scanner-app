@@ -84,13 +84,11 @@ export default function LoginScreen() {
       <View style={styles.loginCard}>
         {/* Logo */}
         <View style={styles.logoContainer}>
-          <View style={styles.logoCircle}>
-            <Image
-              source={require("../assets/images/icon.png")}
-              style={styles.logoImage}
-              resizeMode="contain"
-            />
-          </View>
+          <Image
+            source={require("../assets/icon/android-chrome-512x512.png")}
+            style={styles.logoImage}
+            resizeMode="contain"
+          />
         </View>
 
         {/* Title */}
@@ -168,18 +166,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 16,
   },
-  logoCircle: {
+  logoImage: {
     width: 60,
     height: 60,
-    borderRadius: 30,
-    backgroundColor: "#FCD34D",
-    justifyContent: "center",
-    alignItems: "center",
-    overflow: "hidden",
-  },
-  logoImage: {
-    width: 50,
-    height: 50,
   },
   title: {
     fontSize: 24,
