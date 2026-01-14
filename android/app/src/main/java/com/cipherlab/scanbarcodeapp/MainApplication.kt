@@ -1,4 +1,4 @@
-package com.anonymous.scanbarcodeapp
+package com.cipherlab.scanbarcodeapp
 
 import android.app.Application
 import android.content.res.Configuration

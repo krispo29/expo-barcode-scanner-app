@@ -7,21 +7,33 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api-app.ship2cu.com"
+      },
       "android": {
-        "image": "ubuntu-22.04-jdk-17-ndk-r26b"
+        "image": "ubuntu-22.04-jdk-17-ndk-r26b",
+        "gradleCommand": ":app:assembleDebug"
       }
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api-app.ship2cu.com"
+      },
       "android": {
         "buildType": "apk",
-        "image": "ubuntu-22.04-jdk-17-ndk-r26b"
+        "image": "ubuntu-22.04-jdk-17-ndk-r26b",
+        "gradleCommand": ":app:assembleRelease"
       }
     },
     "production": {
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://api-app.ship2cu.com"
+      },
       "android": {
         "buildType": "apk",
-        "image": "ubuntu-22.04-jdk-17-ndk-r26b"
+        "image": "ubuntu-22.04-jdk-17-ndk-r26b",
+        "gradleCommand": ":app:assembleRelease"
       }
     }
   },

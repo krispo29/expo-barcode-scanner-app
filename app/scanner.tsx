@@ -43,6 +43,12 @@ type ScanRecord = {
   mode: "auto" | "manual";
 };
 
+type ApiResponse<T = any> = {
+  code: number;
+  message?: string;
+  data: T;
+};
+
 export default function ScannerScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -66,7 +72,6 @@ export default function ScannerScreen() {
   const [scannedLock, setScannedLock] = useState(false);
   const [history, setHistory] = useState<ScanRecord[]>([]);
   const [lastStatus, setLastStatus] = useState<string>("-");
-  const [showHeader, setShowHeader] = useState(false);
 
   const unlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
@@ -117,7 +122,7 @@ export default function ScannerScreen() {
         return;
       }
       
-      const response = await axios.get(endpoint, {
+      const response = await axios.get<ApiResponse<Customer[]>>(endpoint, {
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -128,14 +133,14 @@ export default function ScannerScreen() {
       console.log("Endpoint:", endpoint);
       console.log("Response:", response.data);
 
-      if (response.data && (response.data as any).code === 200) {
-        setCustomers((response.data as any).data);
+      if (response.data && response.data.code === 200) {
+        setCustomers(response.data.data);
       } else {
-        Alert.alert("ไม่สามารถโหลดข้อมูลลูกค้าได้", (response.data as any).message || "กรุณาลองใหม่อีกครั้ง");
+        Alert.alert("ไม่สามารถโหลดข้อมูลลูกค้าได้", response.data.message || "กรุณาลองใหม่อีกครั้ง");
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Load customers error:', error);
-      if ((error as any)?.response?.status === 401) {
+      if (error?.response?.status === 401) {
         Alert.alert("ไม่ได้รับอนุญาต", "กรุณา login ใหม่อีกครั้ง");
       } else {
         Alert.alert("ไม่สามารถโหลดข้อมูลลูกค้าได้", "เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่อีกครั้ง");
@@ -146,6 +151,18 @@ export default function ScannerScreen() {
   };
 
   const handleLogout = async () => {
+    // Safety: Prevent logout if a scan just happened (within 1000ms)
+    if (Date.now() - lastScanRef.current.timestamp < 1000) {
+      console.log("Logout blocked - recent scan detected");
+      return;
+    }
+    
+    // Safety: Prevent logout if input is focused (likely phantom click from scanner Enter key)
+    if (inputRef.current?.isFocused()) {
+      console.log("Logout blocked - input is focused");
+      return;
+    }
+
     Alert.alert(
       "ออกจากระบบ",
       "คุณต้องการออกจากระบบหรือไม่?",
@@ -157,18 +174,20 @@ export default function ScannerScreen() {
         {
           text: "ออกจากระบบ",
           style: "destructive",
-          onPress: async () => {
-            try {
-              // ลบข้อมูลการเข้าสู่ระบบ
-              await AsyncStorage.removeItem('access_token');
-              await AsyncStorage.removeItem('user_data');
-              
-              // กลับไปหน้า login
-              router.replace("/login");
-            } catch (error) {
-              console.error('Logout error:', error);
-              Alert.alert("เกิดข้อผิดพลาด", "ไม่สามารถออกจากระบบได้");
-            }
+          onPress: () => {
+            void (async () => {
+              try {
+                // ลบข้อมูลการเข้าสู่ระบบ
+                await AsyncStorage.removeItem('access_token');
+                await AsyncStorage.removeItem('user_data');
+                
+                // กลับไปหน้า login
+                router.replace("/login");
+              } catch (error) {
+                console.error('Logout error:', error);
+                Alert.alert("เกิดข้อผิดพลาด", "ไม่สามารถออกจากระบบได้");
+              }
+            })();
           }
         }
       ]
@@ -236,7 +255,7 @@ export default function ScannerScreen() {
         
         console.log("Endpoint:", endpoint);
         
-        const response = await axios.get(endpoint, {
+        const response = await axios.get<ApiResponse>(endpoint, {
           headers: {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
@@ -246,7 +265,7 @@ export default function ScannerScreen() {
         console.log("=== Scan Response ===");
         console.log("Response:", response.data);
 
-        if (response.data && (response.data as any).code === 200) {
+        if (response.data && response.data.code === 200) {
           // สแกนสำเร็จ
           idCounter.current += 1;
           const record: ScanRecord = {
@@ -275,7 +294,7 @@ export default function ScannerScreen() {
             }
           ]);
         } else {
-          Alert.alert("ไม่พบข้อมูล", (response.data as any).message || "ไม่พบ Tracking Number นี้ในระบบ", [
+          Alert.alert("ไม่พบข้อมูล", "ไม่พบเลข tracking number", [
             { 
               text: "OK", 
               onPress: () => {
@@ -347,41 +366,27 @@ export default function ScannerScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar style="light" />
 
-      {/* Header Toggle Button */}
+      {/* Invisible Dummy Button - To catch scanner triggers */}
       <TouchableOpacity
-        style={styles.headerToggleButton}
+        style={styles.dummyButton}
         onPress={() => {
-            // Safety: Prevent toggle if a scan just happened (within 500ms)
-            // This prevents the scanner's "Enter" from accidentally clicking the menu 
-            // if focus somehow shifts here.
-            if (Date.now() - lastScanRef.current.timestamp < 500) return;
-            setShowHeader(!showHeader);
+          // Do absolutely nothing - just absorb the scanner trigger
+          console.log("Dummy button triggered - ignoring");
         }}
+        activeOpacity={1}
       >
-        <Text style={styles.headerToggleText}>
-          {showHeader ? "▲" : "▼"} เมนู
-        </Text>
+        <View style={styles.dummyButtonContent} />
       </TouchableOpacity>
 
-      {/* Header */}
-      {showHeader && (
-        <View style={styles.header}>
-          <View style={styles.headerContent}>
-            <View style={styles.headerLeft}>
-              <Text style={styles.headerTitle}>SHIP2CU Scanner</Text>
-              <Text style={styles.headerSubtitle}>
-                สแกนบาร์โค้ดเพื่อตรวจสอบ Tracking Number
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={styles.logoutButton}
-              onPress={handleLogout}
-            >
-              <Text style={styles.logoutButtonText}>ออกจากระบบ</Text>
-            </TouchableOpacity>
-          </View>
+      {/* Compact Header - App Title Only */}
+      <View style={styles.compactHeader}>
+        <View style={styles.compactHeaderContent}>
+          <Text style={styles.compactHeaderTitle}>SHIP2CU Scanner</Text>
+          <Text style={styles.compactHeaderSubtitle}>สแกนบาร์โค้ดเพื่อตรวจสอบ Tracking Number</Text>
         </View>
-      )}
+      </View>
+
+
 
       {/* Bottom Panel (Scrollable) */}
       <View
@@ -553,7 +558,6 @@ export default function ScannerScreen() {
                   placeholderTextColor="#9CA3AF"
                   autoCorrect={false}
                   editable={canScan}
-                  blurOnSubmit={false} // Prevent focus loss on scan
                   onSubmitEditing={autoEnter ? handleManualSubmit : undefined}
                 />
                 {!autoEnter && (
@@ -650,6 +654,19 @@ export default function ScannerScreen() {
               </ScrollView>
             )}
           </View>
+
+          {/* Logout Section - At Bottom */}
+          <View style={styles.logoutSection}>
+            <TouchableOpacity
+              style={styles.bottomLogoutButton}
+              onPress={handleLogout}
+              delayPressIn={200}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.bottomLogoutButtonText}>🚪 ออกจากระบบ</Text>
+              <Text style={styles.bottomLogoutButtonHint}>(กดเพื่อออกจากระบบ)</Text>
+            </TouchableOpacity>
+          </View>
         </ScrollView>
       </View>
     </View>
@@ -661,55 +678,25 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#1F2937",
   },
-  headerToggleButton: {
+  compactHeader: {
     backgroundColor: "#374151",
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    alignItems: "center",
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: "#4B5563",
   },
-  headerToggleText: {
-    fontSize: 14,
+  compactHeaderContent: {
+    alignItems: "center",
+  },
+  compactHeaderTitle: {
+    fontSize: 16,
     fontWeight: "600",
     color: "#FFFFFF",
+    marginBottom: 2,
   },
-  header: {
-    backgroundColor: "#374151",
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: "#4B5563",
-  },
-  headerContent: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  headerLeft: {
-    flex: 1,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#FFFFFF",
-    marginBottom: 4,
-  },
-  headerSubtitle: {
-    fontSize: 14,
-    color: "#D1D5DB",
-  },
-  logoutButton: {
-    backgroundColor: "#EF4444",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 6,
-    marginLeft: 16,
-  },
-  logoutButtonText: {
+  compactHeaderSubtitle: {
     fontSize: 12,
-    fontWeight: "600",
-    color: "#FFFFFF",
+    color: "#D1D5DB",
   },
   controlsPanel: {
     backgroundColor: "#F9FAFB",
@@ -1100,5 +1087,34 @@ const styles = StyleSheet.create({
   historyTime: {
     fontSize: 14,
     color: "#6B7280",
+  },
+  logoutSection: {
+    marginTop: 32,
+    paddingTop: 24,
+    borderTopWidth: 1,
+    borderTopColor: "#E5E7EB",
+  },
+  bottomLogoutButton: {
+    backgroundColor: "#EF4444",
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  bottomLogoutButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#FFFFFF",
+    marginBottom: 4,
+  },
+  bottomLogoutButtonHint: {
+    fontSize: 12,
+    color: "#FECACA",
+    opacity: 0.8,
   },
 });

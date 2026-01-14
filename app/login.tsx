@@ -15,6 +15,15 @@ import {
   View
 } from "react-native";
 
+type LoginResponse = {
+  code: number;
+  message?: string;
+  data: {
+    access_token: string;
+    [key: string]: any;
+  };
+};
+
 export default function LoginScreen() {
   const router = useRouter();
   const [email, setEmail] = useState("");
@@ -41,7 +50,7 @@ export default function LoginScreen() {
       console.log("Endpoint:", endpoint);
       console.log("Username:", email.trim());
       
-      const response = await axios.post(endpoint, formData, {
+      const response = await axios.post<LoginResponse>(endpoint, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -50,17 +59,17 @@ export default function LoginScreen() {
       console.log("=== Login Response ===");
       console.log("Response:", response.data);
 
-      if (response.data && (response.data as any).code === 200) {
+      if (response.data && response.data.code === 200) {
         // บันทึก token และข้อมูล user
-        await AsyncStorage.setItem('access_token', (response.data as any).data.access_token);
-        await AsyncStorage.setItem('user_data', JSON.stringify((response.data as any).data));
+        await AsyncStorage.setItem('access_token', response.data.data.access_token);
+        await AsyncStorage.setItem('user_data', JSON.stringify(response.data.data));
         
-        console.log('Login success:', (response.data as any).data);
+        console.log('Login success:', response.data.data);
         
         // ไปหน้า scanner
         router.replace("/scanner");
       } else {
-        Alert.alert("เข้าสู่ระบบไม่สำเร็จ", (response.data as any).message || "กรุณาตรวจสอบ Email และ Password");
+        Alert.alert("เข้าสู่ระบบไม่สำเร็จ", response.data.message || "กรุณาตรวจสอบ Email และ Password");
       }
     } catch (error: any) {
       console.error('Login error:', error);

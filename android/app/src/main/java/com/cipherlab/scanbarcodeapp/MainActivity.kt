@@ -1,4 +1,4 @@
-package com.anonymous.scanbarcodeapp
+package com.cipherlab.scanbarcodeapp
 import expo.modules.splashscreen.SplashScreenManager
 
 import android.os.Build
