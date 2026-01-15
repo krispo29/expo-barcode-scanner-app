@@ -1,24 +1,25 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from "axios";
+import { Audio as ExpoAudio } from 'expo-av';
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
+    useCallback,
+    useEffect,
+    useRef,
+    useState,
 } from "react";
 import {
-  Alert,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  Vibration,
-  View
+    Alert,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Switch,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    Vibration,
+    View
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -49,7 +50,7 @@ type ApiResponse<T = any> = {
   data: T;
 };
 
-export default function ScannerScreen() {
+export default function ReleaseScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
@@ -72,6 +73,36 @@ export default function ScannerScreen() {
   const [scannedLock, setScannedLock] = useState(false);
   const [history, setHistory] = useState<ScanRecord[]>([]);
   const [lastStatus, setLastStatus] = useState<string>("-");
+
+  // Sound objects
+  const [soundSuccess, setSoundSuccess] = useState<ExpoAudio.Sound>();
+  const [soundError, setSoundError] = useState<ExpoAudio.Sound>();
+
+  // Load sounds
+  useEffect(() => {
+    async function loadSounds() {
+      try {
+        const { sound: s1 } = await ExpoAudio.Sound.createAsync(
+           require('../assets/sounds/success.mp3')
+        );
+        setSoundSuccess(s1);
+        
+        const { sound: s2 } = await ExpoAudio.Sound.createAsync(
+           require('../assets/sounds/error.mp3')
+        );
+        setSoundError(s2);
+      } catch (error) {
+         console.log("Error loading sounds", error);
+      }
+    }
+
+    loadSounds();
+    
+    return () => {
+      soundSuccess?.unloadAsync();
+      soundError?.unloadAsync();
+    };
+  }, []);
 
   const unlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
@@ -283,27 +314,32 @@ export default function ScannerScreen() {
           
           
           
-          Alert.alert("สแกนสำเร็จ", `Tracking No: ${normalized}\nลูกค้า: ${customer.name}`, [
-            { 
-              text: "OK", 
-              onPress: () => {
-                setTimeout(() => {
-                  inputRef.current?.focus();
-                }, 200);
-              }
+          // สแกนสำเร็จ
+          if (soundSuccess) {
+            try {
+              await soundSuccess.replayAsync();
+            } catch (err) {
+              console.log("Error playing success sound", err);
             }
-          ]);
+          }
+
+          // Refocus input
+          setTimeout(() => {
+            inputRef.current?.focus();
+          }, 200);
         } else {
-          Alert.alert("ไม่พบข้อมูล", "ไม่พบเลข tracking number", [
-            { 
-              text: "OK", 
-              onPress: () => {
-                setTimeout(() => {
-                  inputRef.current?.focus();
-                }, 200);
-              }
-            }
-          ]);
+          // สแกนไม่พบข้อมูล (ผิด)
+          if (soundError) {
+             try {
+               await soundError.replayAsync();
+             } catch (err) {
+               console.log("Error playing error sound", err);
+             }
+          }
+
+          setTimeout(() => {
+            inputRef.current?.focus();
+          }, 200);
         }
       } catch (error: any) {
         console.error('Scan error:', error);
@@ -311,16 +347,17 @@ export default function ScannerScreen() {
         if (error?.response?.data?.message) {
           errorMessage = error.response.data.message;
         }
-        Alert.alert("ตรวจสอบไม่สำเร็จ", errorMessage, [
-          { 
-            text: "OK", 
-            onPress: () => {
-              setTimeout(() => {
-                inputRef.current?.focus();
-              }, 200);
-            } 
-          }
-        ]);
+        if (soundError) {
+           try {
+             await soundError.replayAsync();
+           } catch (err) {
+             console.log("Error playing error sound", err);
+           }
+        }
+
+        setTimeout(() => {
+          inputRef.current?.focus();
+        }, 200);
       } finally {
         if (unlockTimer.current) clearTimeout(unlockTimer.current);
         unlockTimer.current = setTimeout(() => setScannedLock(false), 900);
@@ -381,8 +418,8 @@ export default function ScannerScreen() {
       {/* Compact Header - App Title Only */}
       <View style={styles.compactHeader}>
         <View style={styles.compactHeaderContent}>
-          <Text style={styles.compactHeaderTitle}>SHIP2CU Scanner</Text>
-          <Text style={styles.compactHeaderSubtitle}>สแกนบาร์โค้ดเพื่อตรวจสอบ Tracking Number</Text>
+          <Text style={styles.compactHeaderTitle}>SHIP2CU Release</Text>
+          <Text style={styles.compactHeaderSubtitle}>สแกนบาร์โค้ดเพื่อปล่อยของ (Release)</Text>
         </View>
       </View>
 

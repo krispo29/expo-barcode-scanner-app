@@ -20,7 +20,7 @@ export default function Index() {
       
       if (token) {
         // มี token แล้ว ไปหน้า scanner
-        router.replace("/scanner");
+        router.replace("/(tabs)/release");
       } else {
         // ยังไม่มี token ไปหน้า login
         router.replace("/login");

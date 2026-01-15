@@ -4,15 +4,15 @@ import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
 import {
-  Alert,
-  Image,
-  KeyboardAvoidingView,
-  Platform,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View
+    Alert,
+    Image,
+    KeyboardAvoidingView,
+    Platform,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View
 } from "react-native";
 
 type LoginResponse = {
@@ -67,7 +67,7 @@ export default function LoginScreen() {
         console.log('Login success:', response.data.data);
         
         // ไปหน้า scanner
-        router.replace("/scanner");
+        router.replace("/(tabs)/release");
       } else {
         Alert.alert("เข้าสู่ระบบไม่สำเร็จ", response.data.message || "กรุณาตรวจสอบ Email และ Password");
       }
