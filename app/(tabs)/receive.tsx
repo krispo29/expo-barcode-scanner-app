@@ -126,6 +126,17 @@ export default function ReceiveScreen() {
     };
   }, []);
 
+  // Check authentication on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = await AsyncStorage.getItem("access_token");
+      if (!token) {
+        router.replace("/login");
+      }
+    };
+    checkAuth();
+  }, [router]);
+
   // Load customers เมื่อเข้าหน้า
   useEffect(() => {
     loadCustomers();

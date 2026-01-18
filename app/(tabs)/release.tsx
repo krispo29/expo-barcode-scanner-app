@@ -5,16 +5,16 @@ import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-    Alert,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Switch,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    Vibration,
-    View,
+  Alert,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  Vibration,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -118,6 +118,17 @@ export default function ReleaseScreen() {
       if (unlockTimer.current) clearTimeout(unlockTimer.current);
     };
   }, []);
+
+  // Check authentication on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = await AsyncStorage.getItem("access_token");
+      if (!token) {
+        router.replace("/login");
+      }
+    };
+    checkAuth();
+  }, [router]);
 
   // Load customers เมื่อเข้าหน้า
   useEffect(() => {
