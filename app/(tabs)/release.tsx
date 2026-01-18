@@ -1,14 +1,9 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
-import { Audio as ExpoAudio } from 'expo-av';
+import { Audio as ExpoAudio } from "expo-av";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import {
-    useCallback,
-    useEffect,
-    useRef,
-    useState,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     Alert,
     Platform,
@@ -19,16 +14,16 @@ import {
     TextInput,
     TouchableOpacity,
     Vibration,
-    View
+    View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-type Customer = { 
-  uuid: string; 
-  code: string; 
+type Customer = {
+  uuid: string;
+  code: string;
   companyCode: string;
   email: string;
-  name: string; 
+  name: string;
   tel: string;
   discountPointRate: number;
   createdAt: string;
@@ -58,7 +53,7 @@ export default function ReleaseScreen() {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loadingCustomers, setLoadingCustomers] = useState(false);
-  
+
   // Check if ready to scan
   const canScan = customer !== null;
 
@@ -74,33 +69,33 @@ export default function ReleaseScreen() {
   const [history, setHistory] = useState<ScanRecord[]>([]);
   const [lastStatus, setLastStatus] = useState<string>("-");
 
-  // Sound objects
+  // Sound objects for Release: success, beep
   const [soundSuccess, setSoundSuccess] = useState<ExpoAudio.Sound>();
-  const [soundError, setSoundError] = useState<ExpoAudio.Sound>();
+  const [soundBeep, setSoundBeep] = useState<ExpoAudio.Sound>();
 
   // Load sounds
   useEffect(() => {
     async function loadSounds() {
       try {
         const { sound: s1 } = await ExpoAudio.Sound.createAsync(
-           require('../assets/sounds/success.mp3')
+          require("../../assets/sounds/success.mp3"),
         );
         setSoundSuccess(s1);
-        
+
         const { sound: s2 } = await ExpoAudio.Sound.createAsync(
-           require('../assets/sounds/error.mp3')
+          require("../../assets/sounds/beep.mp3"),
         );
-        setSoundError(s2);
+        setSoundBeep(s2);
       } catch (error) {
-         console.log("Error loading sounds", error);
+        console.log("Error loading sounds", error);
       }
     }
 
     loadSounds();
-    
+
     return () => {
       soundSuccess?.unloadAsync();
-      soundError?.unloadAsync();
+      soundBeep?.unloadAsync();
     };
   }, []);
 
@@ -144,22 +139,22 @@ export default function ReleaseScreen() {
     try {
       const apiUrl = process.env.EXPO_PUBLIC_API_URL;
       const endpoint = `${apiUrl}/v1/customers/inbound`;
-      
+
       // ดึง access token จาก storage
-      const token = await AsyncStorage.getItem('access_token');
-      
+      const token = await AsyncStorage.getItem("access_token");
+
       if (!token) {
         Alert.alert("ไม่พบ Token", "กรุณา login ใหม่อีกครั้ง");
         return;
       }
-      
+
       const response = await axios.get<ApiResponse<Customer[]>>(endpoint, {
         headers: {
           Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
       });
-      
+
       console.log("=== Load Customers Response ===");
       console.log("Endpoint:", endpoint);
       console.log("Response:", response.data);
@@ -167,14 +162,20 @@ export default function ReleaseScreen() {
       if (response.data && response.data.code === 200) {
         setCustomers(response.data.data);
       } else {
-        Alert.alert("ไม่สามารถโหลดข้อมูลลูกค้าได้", response.data.message || "กรุณาลองใหม่อีกครั้ง");
+        Alert.alert(
+          "ไม่สามารถโหลดข้อมูลลูกค้าได้",
+          response.data.message || "กรุณาลองใหม่อีกครั้ง",
+        );
       }
     } catch (error: any) {
-      console.error('Load customers error:', error);
+      console.error("Load customers error:", error);
       if (error?.response?.status === 401) {
         Alert.alert("ไม่ได้รับอนุญาต", "กรุณา login ใหม่อีกครั้ง");
       } else {
-        Alert.alert("ไม่สามารถโหลดข้อมูลลูกค้าได้", "เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่อีกครั้ง");
+        Alert.alert(
+          "ไม่สามารถโหลดข้อมูลลูกค้าได้",
+          "เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่อีกครั้ง",
+        );
       }
     } finally {
       setLoadingCustomers(false);
@@ -187,42 +188,38 @@ export default function ReleaseScreen() {
       console.log("Logout blocked - recent scan detected");
       return;
     }
-    
+
     // Safety: Prevent logout if input is focused (likely phantom click from scanner Enter key)
     if (inputRef.current?.isFocused()) {
       console.log("Logout blocked - input is focused");
       return;
     }
 
-    Alert.alert(
-      "ออกจากระบบ",
-      "คุณต้องการออกจากระบบหรือไม่?",
-      [
-        {
-          text: "ยกเลิก",
-          style: "cancel"
+    Alert.alert("ออกจากระบบ", "คุณต้องการออกจากระบบหรือไม่?", [
+      {
+        text: "ยกเลิก",
+        style: "cancel",
+      },
+      {
+        text: "ออกจากระบบ",
+        style: "destructive",
+        onPress: () => {
+          void (async () => {
+            try {
+              // ลบข้อมูลการเข้าสู่ระบบ
+              await AsyncStorage.removeItem("access_token");
+              await AsyncStorage.removeItem("user_data");
+
+              // กลับไปหน้า login
+              router.replace("/login");
+            } catch (error) {
+              console.error("Logout error:", error);
+              Alert.alert("เกิดข้อผิดพลาด", "ไม่สามารถออกจากระบบได้");
+            }
+          })();
         },
-        {
-          text: "ออกจากระบบ",
-          style: "destructive",
-          onPress: () => {
-            void (async () => {
-              try {
-                // ลบข้อมูลการเข้าสู่ระบบ
-                await AsyncStorage.removeItem('access_token');
-                await AsyncStorage.removeItem('user_data');
-                
-                // กลับไปหน้า login
-                router.replace("/login");
-              } catch (error) {
-                console.error('Logout error:', error);
-                Alert.alert("เกิดข้อผิดพลาด", "ไม่สามารถออกจากระบบได้");
-              }
-            })();
-          }
-        }
-      ]
-    );
+      },
+    ]);
   };
 
   const normalizeTracking = (value: string): string => {
@@ -233,10 +230,7 @@ export default function ReleaseScreen() {
     async (rawValue: string, mode: "auto" | "manual") => {
       // Check if customer is selected
       if (!canScan || !customer) {
-        Alert.alert(
-          "กรุณาเลือกลูกค้า",
-          "กรุณาเลือกลูกค้าก่อนสแกน"
-        );
+        Alert.alert("กรุณาเลือกลูกค้า", "กรุณาเลือกลูกค้าก่อนสแกน");
         return;
       }
 
@@ -244,13 +238,14 @@ export default function ReleaseScreen() {
       if (!normalized) {
         Alert.alert(
           "ไม่พบ Tracking No.",
-          "ข้อมูลที่ได้ว่างเปล่าหรือไม่ใช่ตัวเลข/ตัวอักษร"
+          "ข้อมูลที่ได้ว่างเปล่าหรือไม่ใช่ตัวเลข/ตัวอักษร",
         );
         return;
       }
 
       const now = Date.now();
-      const { value: lastValue, timestamp: lastTimestamp } = lastScanRef.current;
+      const { value: lastValue, timestamp: lastTimestamp } =
+        lastScanRef.current;
 
       // ป้องกันการยิงซ้ำติดกัน
       if (lastValue === normalized && now - lastTimestamp < 1500) {
@@ -272,24 +267,24 @@ export default function ReleaseScreen() {
         console.log("=== Scan Request ===");
         console.log("Tracking No:", normalized);
         console.log("Customer Code:", customer.code);
-        
+
         const apiUrl = process.env.EXPO_PUBLIC_API_URL;
         const endpoint = `${apiUrl}/v1/orders/released/${normalized}?customer_code=${customer.code}`;
-        
+
         // ดึง access token จาก storage
-        const token = await AsyncStorage.getItem('access_token');
-        
+        const token = await AsyncStorage.getItem("access_token");
+
         if (!token) {
           Alert.alert("ไม่พบ Token", "กรุณา login ใหม่อีกครั้ง");
           return;
         }
-        
+
         console.log("Endpoint:", endpoint);
-        
+
         const response = await axios.get<ApiResponse>(endpoint, {
           headers: {
             Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
+            "Content-Type": "application/json",
           },
         });
 
@@ -311,9 +306,7 @@ export default function ReleaseScreen() {
           setHistory((prev) => [record, ...prev].slice(0, 30));
           setLastStatus(`${normalized} • ${customer.name}`);
           setInput(""); // เคลียร์ค่าเก่าหลังสแกนสำเร็จ
-          
-          
-          
+
           // สแกนสำเร็จ
           if (soundSuccess) {
             try {
@@ -328,13 +321,13 @@ export default function ReleaseScreen() {
             inputRef.current?.focus();
           }, 200);
         } else {
-          // สแกนไม่พบข้อมูล (ผิด)
-          if (soundError) {
-             try {
-               await soundError.replayAsync();
-             } catch (err) {
-               console.log("Error playing error sound", err);
-             }
+          // สแกนไม่พบข้อมูล - เล่นเสียง beep
+          if (soundBeep) {
+            try {
+              await soundBeep.replayAsync();
+            } catch (err) {
+              console.log("Error playing beep sound", err);
+            }
           }
 
           setTimeout(() => {
@@ -342,17 +335,17 @@ export default function ReleaseScreen() {
           }, 200);
         }
       } catch (error: any) {
-        console.error('Scan error:', error);
+        console.error("Scan error:", error);
         let errorMessage = "เกิดข้อผิดพลาดในการตรวจสอบ Tracking Number";
         if (error?.response?.data?.message) {
           errorMessage = error.response.data.message;
         }
-        if (soundError) {
-           try {
-             await soundError.replayAsync();
-           } catch (err) {
-             console.log("Error playing error sound", err);
-           }
+        if (soundBeep) {
+          try {
+            await soundBeep.replayAsync();
+          } catch (err) {
+            console.log("Error playing beep sound", err);
+          }
         }
 
         setTimeout(() => {
@@ -363,7 +356,7 @@ export default function ReleaseScreen() {
         unlockTimer.current = setTimeout(() => setScannedLock(false), 900);
       }
     },
-    [canScan, customer, scannedLock]
+    [canScan, customer, scannedLock],
   );
 
   // ใช้กับสแกนเนอร์ฮาร์ดแวร์ (RS51 ยิงแล้วส่งตัวอักษร + Enter เข้ามา)
@@ -381,7 +374,7 @@ export default function ReleaseScreen() {
       }
       setInput(sanitized);
     },
-    [autoEnter, handleDetected]
+    [autoEnter, handleDetected],
   );
 
   const handleManualSubmit = () => {
@@ -396,7 +389,7 @@ export default function ReleaseScreen() {
     (item) =>
       item.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
       item.code.toLowerCase().includes(customerSearch.toLowerCase()) ||
-      item.email.toLowerCase().includes(customerSearch.toLowerCase())
+      item.email.toLowerCase().includes(customerSearch.toLowerCase()),
   );
 
   return (
@@ -419,11 +412,11 @@ export default function ReleaseScreen() {
       <View style={styles.compactHeader}>
         <View style={styles.compactHeaderContent}>
           <Text style={styles.compactHeaderTitle}>SHIP2CU Release</Text>
-          <Text style={styles.compactHeaderSubtitle}>สแกนบาร์โค้ดเพื่อปล่อยของ (Release)</Text>
+          <Text style={styles.compactHeaderSubtitle}>
+            สแกนบาร์โค้ดเพื่อปล่อยของ (Release)
+          </Text>
         </View>
       </View>
-
-
 
       {/* Bottom Panel (Scrollable) */}
       <View
@@ -443,7 +436,10 @@ export default function ReleaseScreen() {
             <Text style={styles.sectionTitle}>1. เลือกลูกค้า</Text>
             <View>
               <TouchableOpacity
-                style={[styles.selectButton, showCustomerDropdown && styles.selectButtonActive]}
+                style={[
+                  styles.selectButton,
+                  showCustomerDropdown && styles.selectButtonActive,
+                ]}
                 onPress={() => {
                   setShowCustomerDropdown(!showCustomerDropdown);
                 }}
@@ -453,7 +449,8 @@ export default function ReleaseScreen() {
                   <Text style={styles.selectButtonLabel}>
                     {(() => {
                       if (loadingCustomers) return "กำลังโหลดข้อมูลลูกค้า...";
-                      if (customer) return `${customer.code} - ${customer.name}`;
+                      if (customer)
+                        return `${customer.code} - ${customer.name}`;
                       return "กดเพื่อเลือกลูกค้า";
                     })()}
                   </Text>
@@ -463,7 +460,12 @@ export default function ReleaseScreen() {
                     </Text>
                   )}
                 </View>
-                <Text style={[styles.selectButtonIcon, showCustomerDropdown && styles.selectButtonIconActive]}>
+                <Text
+                  style={[
+                    styles.selectButtonIcon,
+                    showCustomerDropdown && styles.selectButtonIconActive,
+                  ]}
+                >
                   {showCustomerDropdown ? "▲" : "▼"}
                 </Text>
               </TouchableOpacity>
@@ -492,23 +494,25 @@ export default function ReleaseScreen() {
 
                   <View style={styles.dropdownHeader}>
                     <Text style={styles.dropdownHeaderText}>
-                      {customerSearch.length > 0 
-                        ? `พบ ${filteredCustomers.length} รายการ` 
-                        : `ทั้งหมด ${customers.length} รายการ`
-                      }
+                      {customerSearch.length > 0
+                        ? `พบ ${filteredCustomers.length} รายการ`
+                        : `ทั้งหมด ${customers.length} รายการ`}
                     </Text>
-                    {customerSearch.length > 0 && filteredCustomers.length > 10 && (
-                      <Text style={styles.dropdownHeaderHint}>
-                        แสดง 10 รายการแรก
-                      </Text>
-                    )}
+                    {customerSearch.length > 0 &&
+                      filteredCustomers.length > 10 && (
+                        <Text style={styles.dropdownHeaderHint}>
+                          แสดง 10 รายการแรก
+                        </Text>
+                      )}
                   </View>
 
                   <ScrollView style={styles.dropdownList} nestedScrollEnabled>
                     {filteredCustomers.length === 0 ? (
                       <View style={styles.emptySearch}>
                         <Text style={styles.emptySearchIcon}>🔍</Text>
-                        <Text style={styles.emptySearchText}>ไม่พบข้อมูลลูกค้า</Text>
+                        <Text style={styles.emptySearchText}>
+                          ไม่พบข้อมูลลูกค้า
+                        </Text>
                         <Text style={styles.emptySearchHint}>
                           ลองค้นหาด้วยรหัสลูกค้า ชื่อ หรืออีเมล
                         </Text>
@@ -519,7 +523,8 @@ export default function ReleaseScreen() {
                           key={`customer-${item.uuid}-${index}`}
                           style={[
                             styles.dropdownItem,
-                            customer?.uuid === item.uuid && styles.dropdownItemActive,
+                            customer?.uuid === item.uuid &&
+                              styles.dropdownItemActive,
                           ]}
                           onPress={() => {
                             setCustomer(item);
@@ -532,7 +537,8 @@ export default function ReleaseScreen() {
                               {item.code} - {item.name}
                             </Text>
                             <Text style={styles.dropdownItemDescription}>
-                              📧 {item.email} | 📞 {item.tel} | 📦 {item.totalOrder} orders
+                              📧 {item.email} | 📞 {item.tel} | 📦{" "}
+                              {item.totalOrder} orders
                             </Text>
                           </View>
                           {customer?.uuid === item.uuid && (
@@ -550,9 +556,7 @@ export default function ReleaseScreen() {
           {/* Ready to Scan Notice */}
           {canScan ? (
             <View style={[styles.section, styles.readyNotice]}>
-              <Text style={styles.readyNoticeTitle}>
-                ✅ พร้อมสแกนบาร์โค้ด
-              </Text>
+              <Text style={styles.readyNoticeTitle}>✅ พร้อมสแกนบาร์โค้ด</Text>
               <Text style={styles.readyNoticeText}>
                 คุณได้เลือกลูกค้าแล้ว สามารถเริ่มสแกนบาร์โค้ดได้
               </Text>
@@ -588,8 +592,15 @@ export default function ReleaseScreen() {
                   ref={inputRef}
                   value={input}
                   onChangeText={handleInputChange}
-                  placeholder={canScan ? "กรอกหรือสแกน Tracking No." : "เลือกลูกค้าก่อนสแกน"}
-                  style={[styles.trackingInput, !canScan && styles.trackingInputDisabled]}
+                  placeholder={
+                    canScan
+                      ? "กรอกหรือสแกน Tracking No."
+                      : "เลือกลูกค้าก่อนสแกน"
+                  }
+                  style={[
+                    styles.trackingInput,
+                    !canScan && styles.trackingInputDisabled,
+                  ]}
                   keyboardType="default"
                   returnKeyType="done"
                   placeholderTextColor="#9CA3AF"
@@ -602,7 +613,8 @@ export default function ReleaseScreen() {
                     onPress={handleManualSubmit}
                     style={[
                       styles.submitButton,
-                      (!input.trim() || !canScan) && styles.submitButtonDisabled,
+                      (!input.trim() || !canScan) &&
+                        styles.submitButtonDisabled,
                     ]}
                     disabled={!input.trim() || !canScan}
                   >
@@ -642,22 +654,30 @@ export default function ReleaseScreen() {
                 {history.slice(0, 10).map((item, index) => {
                   const scanTime = new Date(item.scannedAt);
                   const isLatest = index === 0;
-                  
+
                   return (
                     <View
                       key={item.id}
-                      style={[styles.historyItem, isLatest && styles.historyItemLatest]}
+                      style={[
+                        styles.historyItem,
+                        isLatest && styles.historyItemLatest,
+                      ]}
                     >
                       <View style={styles.historyLeft}>
                         <View
-                          style={[styles.historyIcon, isLatest && styles.historyIconLatest]}
+                          style={[
+                            styles.historyIcon,
+                            isLatest && styles.historyIconLatest,
+                          ]}
                         >
                           <Text style={styles.historyIconText}>
                             {isLatest ? "🆕" : "📦"}
                           </Text>
                         </View>
                         <View style={styles.historyNumber}>
-                          <Text style={styles.historyNumberText}>#{history.length - index}</Text>
+                          <Text style={styles.historyNumberText}>
+                            #{history.length - index}
+                          </Text>
                         </View>
                       </View>
                       <View style={styles.historyContent}>
@@ -701,7 +721,9 @@ export default function ReleaseScreen() {
               activeOpacity={0.8}
             >
               <Text style={styles.bottomLogoutButtonText}>🚪 ออกจากระบบ</Text>
-              <Text style={styles.bottomLogoutButtonHint}>(กดเพื่อออกจากระบบ)</Text>
+              <Text style={styles.bottomLogoutButtonHint}>
+                (กดเพื่อออกจากระบบ)
+              </Text>
             </TouchableOpacity>
           </View>
         </ScrollView>

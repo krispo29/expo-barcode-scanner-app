@@ -46,12 +46,13 @@
     "experiments": {
       "typedRoutes": true
     },
+    "owner": "mikepo29",
     "extra": {
       "router": {
         "origin": false
       },
       "eas": {
-        "projectId": "a71ffd90-465e-4cd5-a189-68547ef30743"
+        "projectId": "9906f7b8-48d6-40a5-9710-1be3fc79f208"
       }
     }
   }
