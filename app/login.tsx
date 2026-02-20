@@ -1,5 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import axios from 'axios';
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import axios from "axios";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
@@ -12,7 +12,7 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
-    View
+    View,
 } from "react-native";
 
 type LoginResponse = {
@@ -40,8 +40,8 @@ export default function LoginScreen() {
     try {
       // เรียก API login ของ SHIP2CU ด้วย FormData
       const formData = new FormData();
-      formData.append('username', email.trim());
-      formData.append('password', password.trim());
+      formData.append("username", email.trim());
+      formData.append("password", password.trim());
 
       const apiUrl = process.env.EXPO_PUBLIC_API_URL;
       const endpoint = `${apiUrl}/auth/sign-in`;
@@ -49,10 +49,10 @@ export default function LoginScreen() {
       console.log("=== Login Request ===");
       console.log("Endpoint:", endpoint);
       console.log("Username:", email.trim());
-      
+
       const response = await axios.post<LoginResponse>(endpoint, formData, {
         headers: {
-          'Content-Type': 'multipart/form-data',
+          "Content-Type": "multipart/form-data",
         },
       });
 
@@ -61,18 +61,33 @@ export default function LoginScreen() {
 
       if (response.data && response.data.code === 200) {
         // บันทึก token และข้อมูล user
-        await AsyncStorage.setItem('access_token', response.data.data.access_token);
-        await AsyncStorage.setItem('user_data', JSON.stringify(response.data.data));
-        
-        console.log('Login success:', response.data.data);
-        
+        await AsyncStorage.setItem(
+          "access_token",
+          response.data.data.access_token,
+        );
+        await AsyncStorage.setItem(
+          "user_data",
+          JSON.stringify(response.data.data),
+        );
+
+        // บันทึกเวลาที่ token จะหมดอายุ
+        const expiresIn = response.data.data.expires_in || 604800; // default 7 days
+        const expiresAt = Date.now() + expiresIn * 1000;
+        await AsyncStorage.setItem("token_expires_at", expiresAt.toString());
+
+        console.log("Login success:", response.data.data);
+        console.log("Token expires at:", new Date(expiresAt).toISOString());
+
         // ไปหน้า scanner
         router.replace("/(tabs)/release");
       } else {
-        Alert.alert("เข้าสู่ระบบไม่สำเร็จ", response.data.message || "กรุณาตรวจสอบ Email และ Password");
+        Alert.alert(
+          "เข้าสู่ระบบไม่สำเร็จ",
+          response.data.message || "กรุณาตรวจสอบ Email และ Password",
+        );
       }
     } catch (error: any) {
-      console.error('Login error:', error);
+      console.error("Login error:", error);
       let errorMessage = "เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่อีกครั้ง";
       if (error?.response?.data?.message) {
         errorMessage = error.response.data.message;
@@ -89,7 +104,7 @@ export default function LoginScreen() {
       behavior={Platform.OS === "ios" ? "padding" : "height"}
     >
       <StatusBar style="dark" />
-      
+
       <View style={styles.loginCard}>
         {/* Logo */}
         <View style={styles.logoContainer}>

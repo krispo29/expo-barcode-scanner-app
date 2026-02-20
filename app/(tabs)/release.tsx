@@ -53,9 +53,10 @@ export default function ReleaseScreen() {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loadingCustomers, setLoadingCustomers] = useState(false);
+  const [selectedLot, setSelectedLot] = useState<any>(null);
 
   // Check if ready to scan
-  const canScan = customer !== null;
+  const canScan = customer !== null && selectedLot !== null;
 
   // Dropdown states
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
@@ -119,15 +120,29 @@ export default function ReleaseScreen() {
     };
   }, []);
 
-  // Check authentication on mount
+  // Check authentication and Lot selection on mount
   useEffect(() => {
-    const checkAuth = async () => {
+    const checkAuthAndLot = async () => {
       const token = await AsyncStorage.getItem("access_token");
       if (!token) {
         router.replace("/login");
+        return;
+      }
+
+      const lotJson = await AsyncStorage.getItem("selected_lot");
+      if (!lotJson) {
+        Alert.alert("กรุณาเลือก Lot", "ต้องเลือก Lot Number ก่อนเริ่มงาน");
+        router.replace("/select-lot");
+        return;
+      }
+
+      try {
+        setSelectedLot(JSON.parse(lotJson));
+      } catch (e) {
+        router.replace("/select-lot");
       }
     };
-    checkAuth();
+    checkAuthAndLot();
   }, [router]);
 
   // Load customers เมื่อเข้าหน้า
@@ -220,6 +235,7 @@ export default function ReleaseScreen() {
               // ลบข้อมูลการเข้าสู่ระบบ
               await AsyncStorage.removeItem("access_token");
               await AsyncStorage.removeItem("user_data");
+              await AsyncStorage.removeItem("token_expires_at");
 
               // กลับไปหน้า login
               router.replace("/login");
@@ -424,7 +440,7 @@ export default function ReleaseScreen() {
         <View style={styles.compactHeaderContent}>
           <Text style={styles.compactHeaderTitle}>SHIP2CU Release</Text>
           <Text style={styles.compactHeaderSubtitle}>
-            สแกนบาร์โค้ดเพื่อปล่อยของ (Release)
+            {selectedLot ? `Lot: ${selectedLot.code}` : "กำลังตรวจสอบ Lot..."}
           </Text>
         </View>
       </View>
