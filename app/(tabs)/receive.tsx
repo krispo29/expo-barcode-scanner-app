@@ -1,5 +1,4 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import axios from "axios";
 import { Audio as ExpoAudio } from "expo-av";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -17,23 +16,10 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
-type Customer = {
-  uuid: string;
-  code: string;
-  companyCode: string;
-  email: string;
-  name: string;
-  tel: string;
-  discountPointRate: number;
-  createdAt: string;
-  totalOrder: number;
-};
+import api from "../../utils/api";
 
 type ScanRecord = {
   id: string;
-  customerId: string;
-  customerCode: string;
   code: string;
   scannedAt: string;
   mode: "auto" | "manual";
@@ -49,20 +35,8 @@ export default function ReceiveScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
 
-  // Customer Selection
-  const [customer, setCustomer] = useState<Customer | null>(null);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [loadingCustomers, setLoadingCustomers] = useState(false);
-  const [selectedLot, setSelectedLot] = useState<any>(null);
-
   // Check if ready to scan
-  const canScan = customer !== null && selectedLot !== null;
-
-  // Dropdown states
-  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
-
-  // Search states
-  const [customerSearch, setCustomerSearch] = useState("");
+  const canScan = true;
 
   const [autoEnter, setAutoEnter] = useState(true);
   const [input, setInput] = useState("");
@@ -127,93 +101,17 @@ export default function ReceiveScreen() {
     };
   }, []);
 
-  // Check authentication and Lot selection on mount
+  // Check authentication on mount
   useEffect(() => {
-    const checkAuthAndLot = async () => {
+    const checkAuth = async () => {
       const token = await AsyncStorage.getItem("access_token");
       if (!token) {
         router.replace("/login");
         return;
       }
-
-      const lotJson = await AsyncStorage.getItem("selected_lot");
-      if (!lotJson) {
-        Alert.alert("กรุณาเลือก Lot", "ต้องเลือก Lot Number ก่อนเริ่มงาน");
-        router.replace("/select-lot");
-        return;
-      }
-
-      try {
-        setSelectedLot(JSON.parse(lotJson));
-      } catch (e) {
-        router.replace("/select-lot");
-      }
     };
-    checkAuthAndLot();
+    checkAuth();
   }, [router]);
-
-  // Load customers เมื่อเข้าหน้า
-  useEffect(() => {
-    loadCustomers();
-  }, []);
-
-  // Auto-focus tracking input when customer is selected and dropdown is closed
-  useEffect(() => {
-    if (customer && !showCustomerDropdown && inputRef.current) {
-      // Small timeout to ensure UI is ready
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 100);
-    }
-  }, [customer, showCustomerDropdown]);
-
-  const loadCustomers = async () => {
-    setLoadingCustomers(true);
-    try {
-      const apiUrl = process.env.EXPO_PUBLIC_API_URL;
-      const endpoint = `${apiUrl}/v1/customers/inbound`;
-
-      // ดึง access token จาก storage
-      const token = await AsyncStorage.getItem("access_token");
-
-      if (!token) {
-        Alert.alert("ไม่พบ Token", "กรุณา login ใหม่อีกครั้ง");
-        return;
-      }
-
-      const response = await axios.get<ApiResponse<Customer[]>>(endpoint, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
-
-      console.log("=== Load Customers Response ===");
-      console.log("Endpoint:", endpoint);
-      console.log("Response:", response.data);
-
-      if (response.data && response.data.code === 200) {
-        setCustomers(response.data.data);
-      } else {
-        Alert.alert(
-          "ไม่สามารถโหลดข้อมูลลูกค้าได้",
-          response.data.message || "กรุณาลองใหม่อีกครั้ง",
-        );
-      }
-    } catch (error: any) {
-      console.error("Load customers error:", error);
-      if (error?.response?.status === 401) {
-        Alert.alert("ไม่ได้รับอนุญาต", "กรุณา login ใหม่อีกครั้ง");
-      } else {
-        Alert.alert(
-          "ไม่สามารถโหลดข้อมูลลูกค้าได้",
-          "เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่อีกครั้ง",
-        );
-      }
-    } finally {
-      setLoadingCustomers(false);
-    }
-  };
 
   const handleLogout = async () => {
     // Safety: Prevent logout if a scan just happened (within 1000ms)
@@ -262,12 +160,6 @@ export default function ReceiveScreen() {
 
   const handleDetected = useCallback(
     async (rawValue: string, mode: "auto" | "manual") => {
-      // Check if customer is selected
-      if (!canScan || !customer) {
-        Alert.alert("กรุณาเลือกลูกค้า", "กรุณาเลือกลูกค้าก่อนสแกน");
-        return;
-      }
-
       const normalized = normalizeTracking(rawValue);
       if (!normalized) {
         Alert.alert(
@@ -281,8 +173,29 @@ export default function ReceiveScreen() {
       const { value: lastValue, timestamp: lastTimestamp } =
         lastScanRef.current;
 
-      // ป้องกันการยิงซ้ำติดกัน
+      // ป้องกันการยิงซ้ำติดกัน (debounce)
       if (lastValue === normalized && now - lastTimestamp < 1500) {
+        return;
+      }
+
+      // Check if already scanned in current session history
+      const isDuplicate = history.some((item) => item.code === normalized);
+      if (isDuplicate) {
+        Alert.alert(
+          "สแกนซ้ำ",
+          `Tracking No. ${normalized} นี้ถูกสแกนไปแล้วในรายการปัจจุบัน`,
+        );
+        setInput("");
+        if (soundBeep) {
+          try {
+            await soundBeep.replayAsync();
+          } catch (err) {
+            console.log("Error playing beep sound", err);
+          }
+        }
+        setTimeout(() => {
+          inputRef.current?.focus();
+        }, 200);
         return;
       }
 
@@ -300,7 +213,6 @@ export default function ReceiveScreen() {
         // เรียก API เพื่อตรวจสอบ tracking number
         console.log("=== Scan Request ===");
         console.log("Tracking No:", normalized);
-        console.log("Customer Code:", customer.code);
 
         const apiUrl = process.env.EXPO_PUBLIC_API_URL;
         const endpoint = `${apiUrl}/v1/orders/received_inbound/${normalized}`;
@@ -315,7 +227,7 @@ export default function ReceiveScreen() {
 
         console.log("Endpoint:", endpoint);
 
-        const response = await axios.get<ApiResponse>(endpoint, {
+        const response = await api.get<ApiResponse>(endpoint, {
           headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
@@ -333,17 +245,13 @@ export default function ReceiveScreen() {
           idCounter.current += 1;
           const record: ScanRecord = {
             id: `${Date.now()}-${idCounter.current}`,
-            customerId: customer.uuid,
-            customerCode: customer.code,
             code: normalized,
             scannedAt: new Date().toISOString(),
             mode,
           };
 
           setHistory((prev) => [record, ...prev].slice(0, 30));
-          setLastStatus(
-            `${normalized} • ${customer.name} • ${shippingType.toUpperCase()}`,
-          );
+          setLastStatus(`${normalized} • ${shippingType.toUpperCase()}`);
           setInput(""); // เคลียร์ค่าเก่าหลังสแกนสำเร็จ
 
           // เล่นเสียงตาม shippingTypeCode (air หรือ sea)
@@ -363,6 +271,7 @@ export default function ReceiveScreen() {
           }, 200);
         } else {
           // สแกนไม่พบข้อมูล - เล่นเสียง beep
+          setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
           if (soundBeep) {
             try {
               await soundBeep.replayAsync();
@@ -381,6 +290,9 @@ export default function ReceiveScreen() {
         if (error?.response?.data?.message) {
           errorMessage = error.response.data.message;
         }
+
+        setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
+
         if (soundBeep) {
           try {
             await soundBeep.replayAsync();
@@ -397,7 +309,7 @@ export default function ReceiveScreen() {
         unlockTimer.current = setTimeout(() => setScannedLock(false), 900);
       }
     },
-    [canScan, customer, scannedLock],
+    [canScan, scannedLock],
   );
 
   // ใช้กับสแกนเนอร์ฮาร์ดแวร์ (RS51 ยิงแล้วส่งตัวอักษร + Enter เข้ามา)
@@ -425,14 +337,6 @@ export default function ReceiveScreen() {
     handleDetected(input, autoEnter ? "auto" : "manual");
   };
 
-  // Filter customers
-  const filteredCustomers = customers.filter(
-    (item) =>
-      item.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
-      item.code.toLowerCase().includes(customerSearch.toLowerCase()) ||
-      item.email.toLowerCase().includes(customerSearch.toLowerCase()),
-  );
-
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar style="light" />
@@ -449,14 +353,19 @@ export default function ReceiveScreen() {
         <View style={styles.dummyButtonContent} />
       </TouchableOpacity>
 
-      {/* Compact Header - App Title Only */}
+      {/* Compact Header - App Title + Logout */}
       <View style={styles.compactHeader}>
         <View style={styles.compactHeaderContent}>
-          <Text style={styles.compactHeaderTitle}>SHIP2CU Receive</Text>
-          <Text style={styles.compactHeaderSubtitle}>
-            {selectedLot ? `Lot: ${selectedLot.code}` : "กำลังตรวจสอบ Lot..."}
-          </Text>
+          <Text style={styles.compactHeaderTitle}>📥 SHIP2CU Receive</Text>
         </View>
+        <TouchableOpacity
+          style={styles.headerLogoutButton}
+          onPress={handleLogout}
+          delayPressIn={200}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.headerLogoutText}>ออกจากระบบ</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Bottom Panel (Scrollable) */}
@@ -472,146 +381,13 @@ export default function ReceiveScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Customer Selection */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>1. เลือกลูกค้า</Text>
-            <View>
-              <TouchableOpacity
-                style={[
-                  styles.selectButton,
-                  showCustomerDropdown && styles.selectButtonActive,
-                ]}
-                onPress={() => {
-                  setShowCustomerDropdown(!showCustomerDropdown);
-                }}
-                disabled={loadingCustomers}
-              >
-                <View style={styles.selectButtonContent}>
-                  <Text style={styles.selectButtonLabel}>
-                    {(() => {
-                      if (loadingCustomers) return "กำลังโหลดข้อมูลลูกค้า...";
-                      if (customer)
-                        return `${customer.code} - ${customer.name}`;
-                      return "กดเพื่อเลือกลูกค้า";
-                    })()}
-                  </Text>
-                  {customer && (
-                    <Text style={styles.selectButtonDescription}>
-                      📧 {customer.email} | 📞 {customer.tel}
-                    </Text>
-                  )}
-                </View>
-                <Text
-                  style={[
-                    styles.selectButtonIcon,
-                    showCustomerDropdown && styles.selectButtonIconActive,
-                  ]}
-                >
-                  {showCustomerDropdown ? "▲" : "▼"}
-                </Text>
-              </TouchableOpacity>
-
-              {showCustomerDropdown && (
-                <View style={styles.dropdown}>
-                  <View style={styles.searchContainer}>
-                    <Text style={styles.searchIcon}>🔍</Text>
-                    <TextInput
-                      value={customerSearch}
-                      onChangeText={setCustomerSearch}
-                      placeholder="ค้นหาด้วยรหัส, ชื่อ หรืออีเมล..."
-                      style={styles.searchInput}
-                      placeholderTextColor="#9CA3AF"
-                      autoFocus={true}
-                    />
-                    {customerSearch.length > 0 && (
-                      <TouchableOpacity
-                        onPress={() => setCustomerSearch("")}
-                        style={styles.searchClear}
-                      >
-                        <Text style={styles.searchClearText}>✕</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-
-                  <View style={styles.dropdownHeader}>
-                    <Text style={styles.dropdownHeaderText}>
-                      {customerSearch.length > 0
-                        ? `พบ ${filteredCustomers.length} รายการ`
-                        : `ทั้งหมด ${customers.length} รายการ`}
-                    </Text>
-                    {customerSearch.length > 0 &&
-                      filteredCustomers.length > 10 && (
-                        <Text style={styles.dropdownHeaderHint}>
-                          แสดง 10 รายการแรก
-                        </Text>
-                      )}
-                  </View>
-
-                  <ScrollView style={styles.dropdownList} nestedScrollEnabled>
-                    {filteredCustomers.length === 0 ? (
-                      <View style={styles.emptySearch}>
-                        <Text style={styles.emptySearchIcon}>🔍</Text>
-                        <Text style={styles.emptySearchText}>
-                          ไม่พบข้อมูลลูกค้า
-                        </Text>
-                        <Text style={styles.emptySearchHint}>
-                          ลองค้นหาด้วยรหัสลูกค้า ชื่อ หรืออีเมล
-                        </Text>
-                      </View>
-                    ) : (
-                      filteredCustomers.slice(0, 10).map((item, index) => (
-                        <TouchableOpacity
-                          key={`customer-${item.uuid}-${index}`}
-                          style={[
-                            styles.dropdownItem,
-                            customer?.uuid === item.uuid &&
-                              styles.dropdownItemActive,
-                          ]}
-                          onPress={() => {
-                            setCustomer(item);
-                            setShowCustomerDropdown(false);
-                            setCustomerSearch("");
-                          }}
-                        >
-                          <View style={styles.dropdownItemContent}>
-                            <Text style={styles.dropdownItemTitle}>
-                              {item.code} - {item.name}
-                            </Text>
-                            <Text style={styles.dropdownItemDescription}>
-                              📧 {item.email} | 📞 {item.tel} | 📦{" "}
-                              {item.totalOrder} orders
-                            </Text>
-                          </View>
-                          {customer?.uuid === item.uuid && (
-                            <Text style={styles.dropdownItemCheck}>✓</Text>
-                          )}
-                        </TouchableOpacity>
-                      ))
-                    )}
-                  </ScrollView>
-                </View>
-              )}
-            </View>
-          </View>
-
           {/* Ready to Scan Notice */}
-          {canScan ? (
-            <View style={[styles.section, styles.readyNotice]}>
-              <Text style={styles.readyNoticeTitle}>✅ พร้อมสแกนบาร์โค้ด</Text>
-              <Text style={styles.readyNoticeText}>
-                คุณได้เลือกลูกค้าแล้ว สามารถเริ่มสแกนบาร์โค้ดได้
-              </Text>
-            </View>
-          ) : (
-            <View style={[styles.section, styles.hardwareNotice]}>
-              <Text style={styles.hardwareNoticeTitle}>
-                ⚠️ กรุณาเลือกลูกค้าก่อนสแกน
-              </Text>
-              <Text style={styles.hardwareNoticeText}>
-                กรุณาเลือกลูกค้าก่อนที่จะสามารถสแกนบาร์โค้ดได้
-              </Text>
-            </View>
-          )}
+          <View style={[styles.section, styles.readyNotice]}>
+            <Text style={styles.readyNoticeTitle}>✅ พร้อมสแกนบาร์โค้ด</Text>
+            <Text style={styles.readyNoticeText}>
+              สามารถเริ่มสแกนบาร์โค้ดได้
+            </Text>
+          </View>
 
           {/* Manual Input & Settings */}
           <View style={styles.section}>
@@ -623,7 +399,7 @@ export default function ReceiveScreen() {
                   <Switch
                     value={autoEnter}
                     onValueChange={setAutoEnter}
-                    trackColor={{ false: "#E5E7EB", true: "#3B82F6" }}
+                    trackColor={{ false: "#E5E7EB", true: "#10B981" }}
                     thumbColor={autoEnter ? "#FFFFFF" : "#9CA3AF"}
                   />
                 </View>
@@ -633,15 +409,8 @@ export default function ReceiveScreen() {
                   ref={inputRef}
                   value={input}
                   onChangeText={handleInputChange}
-                  placeholder={
-                    canScan
-                      ? "กรอกหรือสแกน Tracking No."
-                      : "เลือกลูกค้าก่อนสแกน"
-                  }
-                  style={[
-                    styles.trackingInput,
-                    !canScan && styles.trackingInputDisabled,
-                  ]}
+                  placeholder="กรอกหรือสแกน Tracking No."
+                  style={styles.trackingInput}
                   keyboardType="default"
                   returnKeyType="done"
                   placeholderTextColor="#9CA3AF"
@@ -674,7 +443,7 @@ export default function ReceiveScreen() {
             </View>
 
             {lastStatus !== "-" && (
-              <View style={styles.statusCard}>
+              <View style={styles.historyCard}>
                 <Text style={styles.statusLabel}>สแกนล่าสุด:</Text>
                 <Text style={styles.statusText}>{lastStatus}</Text>
               </View>
@@ -738,9 +507,6 @@ export default function ReceiveScreen() {
                           </View>
                         </View>
                         <View style={styles.historyDetails}>
-                          <Text style={styles.historyCustomer}>
-                            👤 {item.customerCode}
-                          </Text>
                           <Text style={styles.historyTime}>
                             🕐 {scanTime.toLocaleString("th-TH")}
                           </Text>
@@ -752,21 +518,6 @@ export default function ReceiveScreen() {
               </ScrollView>
             )}
           </View>
-
-          {/* Logout Section - At Bottom */}
-          <View style={styles.logoutSection}>
-            <TouchableOpacity
-              style={styles.bottomLogoutButton}
-              onPress={handleLogout}
-              delayPressIn={200}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.bottomLogoutButtonText}>🚪 ออกจากระบบ</Text>
-              <Text style={styles.bottomLogoutButtonHint}>
-                (กดเพื่อออกจากระบบ)
-              </Text>
-            </TouchableOpacity>
-          </View>
         </ScrollView>
       </View>
     </View>
@@ -776,7 +527,7 @@ export default function ReceiveScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#1F2937",
+    backgroundColor: "#022C22",
   },
   dummyButton: {
     position: "absolute",
@@ -790,19 +541,35 @@ const styles = StyleSheet.create({
     height: 1,
   },
   compactHeader: {
-    backgroundColor: "#374151",
+    backgroundColor: "#064E3B",
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#4B5563",
+    borderBottomColor: "#047857",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   compactHeaderContent: {
-    alignItems: "center",
+    alignItems: "flex-start",
+    flex: 1,
   },
-  compactHeaderTitle: {
-    fontSize: 16,
+  headerLogoutButton: {
+    backgroundColor: "#EF4444",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    marginLeft: 12,
+  },
+  headerLogoutText: {
+    fontSize: 12,
     fontWeight: "600",
     color: "#FFFFFF",
+  },
+  compactHeaderTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#34D399",
     marginBottom: 2,
   },
   compactHeaderSubtitle: {
@@ -1050,7 +817,7 @@ const styles = StyleSheet.create({
     color: "#9CA3AF",
   },
   submitButton: {
-    backgroundColor: "#3B82F6",
+    backgroundColor: "#10B981",
     borderRadius: 6,
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -1081,8 +848,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#6B7280",
   },
-  statusCard: {
-    backgroundColor: "#EFF6FF",
+  historyCard: {
+    backgroundColor: "#ECFDF5",
     borderRadius: 6,
     padding: 12,
     marginBottom: 16,
@@ -1126,7 +893,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#F3F4F6",
   },
   historyItemLatest: {
-    backgroundColor: "#EFF6FF",
+    backgroundColor: "#ECFDF5",
   },
   historyLeft: {
     alignItems: "center",
@@ -1142,7 +909,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   historyIconLatest: {
-    backgroundColor: "#3B82F6",
+    backgroundColor: "#10B981",
   },
   historyIconText: {
     fontSize: 16,
@@ -1198,34 +965,5 @@ const styles = StyleSheet.create({
   historyTime: {
     fontSize: 14,
     color: "#6B7280",
-  },
-  logoutSection: {
-    marginTop: 32,
-    paddingTop: 24,
-    borderTopWidth: 1,
-    borderTopColor: "#E5E7EB",
-  },
-  bottomLogoutButton: {
-    backgroundColor: "#EF4444",
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  bottomLogoutButtonText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#FFFFFF",
-    marginBottom: 4,
-  },
-  bottomLogoutButtonHint: {
-    fontSize: 12,
-    color: "#FECACA",
-    opacity: 0.8,
   },
 });

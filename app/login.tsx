@@ -1,19 +1,19 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import axios from "axios";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
 import {
-    Alert,
-    Image,
-    KeyboardAvoidingView,
-    Platform,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
+import api from "../utils/api";
 
 type LoginResponse = {
   code: number;
@@ -50,7 +50,7 @@ export default function LoginScreen() {
       console.log("Endpoint:", endpoint);
       console.log("Username:", email.trim());
 
-      const response = await axios.post<LoginResponse>(endpoint, formData, {
+      const response = await api.post<LoginResponse>(endpoint, formData, {
         headers: {
           "Content-Type": "multipart/form-data",
         },
@@ -79,7 +79,7 @@ export default function LoginScreen() {
         console.log("Token expires at:", new Date(expiresAt).toISOString());
 
         // ไปหน้า scanner
-        router.replace("/(tabs)/release");
+        router.replace("/(tabs)/receive");
       } else {
         Alert.alert(
           "เข้าสู่ระบบไม่สำเร็จ",
