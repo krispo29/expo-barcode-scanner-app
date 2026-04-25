@@ -18,7 +18,6 @@ export default function Index() {
       // ตรวจสอบว่ามี token หรือไม่
       const token = await AsyncStorage.getItem("access_token");
       const expiresAt = await AsyncStorage.getItem("token_expires_at");
-      const selectedLot = await AsyncStorage.getItem("selected_lot");
 
       // ตรวจสอบว่า token ยังไม่หมดอายุ
       const isTokenValid =
@@ -31,18 +30,11 @@ export default function Index() {
           "access_token",
           "user_data",
           "token_expires_at",
-          "selected_lot",
         ]);
       }
 
       if (isTokenValid) {
-        if (selectedLot) {
-          // มี token และเลือก Lot แล้ว ไปหน้า scanner
-          router.replace("/(tabs)/release");
-        } else {
-          // มี token แต่ยังไม่เลือก Lot ไปหน้าเลือก Lot
-          router.replace("/select-lot");
-        }
+        router.replace("/(tabs)/receive");
       } else {
         // ยังไม่มี token หรือ token หมดอายุ ไปหน้า login
         router.replace("/login");

@@ -1,5 +1,4 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import axios from "axios";
 import { Audio as ExpoAudio } from "expo-av";
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -17,6 +16,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import api from "../../utils/api";
 
 type Customer = {
   uuid: string;
@@ -53,10 +53,9 @@ export default function ReleaseScreen() {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loadingCustomers, setLoadingCustomers] = useState(false);
-  const [selectedLot, setSelectedLot] = useState<any>(null);
 
   // Check if ready to scan
-  const canScan = customer !== null && selectedLot !== null;
+  const canScan = customer !== null;
 
   // Dropdown states
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
@@ -120,29 +119,16 @@ export default function ReleaseScreen() {
     };
   }, []);
 
-  // Check authentication and Lot selection on mount
+  // Check authentication on mount
   useEffect(() => {
-    const checkAuthAndLot = async () => {
+    const checkAuth = async () => {
       const token = await AsyncStorage.getItem("access_token");
       if (!token) {
         router.replace("/login");
         return;
       }
-
-      const lotJson = await AsyncStorage.getItem("selected_lot");
-      if (!lotJson) {
-        Alert.alert("กรุณาเลือก Lot", "ต้องเลือก Lot Number ก่อนเริ่มงาน");
-        router.replace("/select-lot");
-        return;
-      }
-
-      try {
-        setSelectedLot(JSON.parse(lotJson));
-      } catch (e) {
-        router.replace("/select-lot");
-      }
     };
-    checkAuthAndLot();
+    checkAuth();
   }, [router]);
 
   // Load customers เมื่อเข้าหน้า
@@ -174,7 +160,7 @@ export default function ReleaseScreen() {
         return;
       }
 
-      const response = await axios.get<ApiResponse<Customer[]>>(endpoint, {
+      const response = await api.get<ApiResponse<Customer[]>>(endpoint, {
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
@@ -274,8 +260,29 @@ export default function ReleaseScreen() {
       const { value: lastValue, timestamp: lastTimestamp } =
         lastScanRef.current;
 
-      // ป้องกันการยิงซ้ำติดกัน
+      // ป้องกันการยิงซ้ำติดกัน (debounce)
       if (lastValue === normalized && now - lastTimestamp < 1500) {
+        return;
+      }
+
+      // Check if already scanned in current session history
+      const isDuplicate = history.some((item) => item.code === normalized);
+      if (isDuplicate) {
+        Alert.alert(
+          "สแกนซ้ำ",
+          `Tracking No. ${normalized} นี้ถูกสแกนไปแล้วในรายการปัจจุบัน`,
+        );
+        setInput("");
+        if (soundBeep) {
+          try {
+            await soundBeep.replayAsync();
+          } catch (err) {
+            console.log("Error playing beep sound", err);
+          }
+        }
+        setTimeout(() => {
+          inputRef.current?.focus();
+        }, 200);
         return;
       }
 
@@ -308,7 +315,7 @@ export default function ReleaseScreen() {
 
         console.log("Endpoint:", endpoint);
 
-        const response = await axios.get<ApiResponse>(endpoint, {
+        const response = await api.get<ApiResponse>(endpoint, {
           headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
@@ -349,6 +356,7 @@ export default function ReleaseScreen() {
           }, 200);
         } else {
           // สแกนไม่พบข้อมูล - เล่นเสียง beep
+          setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
           if (soundBeep) {
             try {
               await soundBeep.replayAsync();
@@ -367,6 +375,9 @@ export default function ReleaseScreen() {
         if (error?.response?.data?.message) {
           errorMessage = error.response.data.message;
         }
+
+        setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
+
         if (soundBeep) {
           try {
             await soundBeep.replayAsync();
@@ -435,14 +446,19 @@ export default function ReleaseScreen() {
         <View style={styles.dummyButtonContent} />
       </TouchableOpacity>
 
-      {/* Compact Header - App Title Only */}
+      {/* Compact Header - App Title + Logout */}
       <View style={styles.compactHeader}>
         <View style={styles.compactHeaderContent}>
-          <Text style={styles.compactHeaderTitle}>SHIP2CU Release</Text>
-          <Text style={styles.compactHeaderSubtitle}>
-            {selectedLot ? `Lot: ${selectedLot.code}` : "กำลังตรวจสอบ Lot..."}
-          </Text>
+          <Text style={styles.compactHeaderTitle}>📤 SHIP2CU Release</Text>
         </View>
+        <TouchableOpacity
+          style={styles.headerLogoutButton}
+          onPress={handleLogout}
+          delayPressIn={200}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.headerLogoutText}>ออกจากระบบ</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Bottom Panel (Scrollable) */}
@@ -462,40 +478,51 @@ export default function ReleaseScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>1. เลือกลูกค้า</Text>
             <View>
-              <TouchableOpacity
-                style={[
-                  styles.selectButton,
-                  showCustomerDropdown && styles.selectButtonActive,
-                ]}
-                onPress={() => {
-                  setShowCustomerDropdown(!showCustomerDropdown);
-                }}
-                disabled={loadingCustomers}
-              >
-                <View style={styles.selectButtonContent}>
-                  <Text style={styles.selectButtonLabel}>
-                    {(() => {
-                      if (loadingCustomers) return "กำลังโหลดข้อมูลลูกค้า...";
-                      if (customer)
-                        return `${customer.code} - ${customer.name}`;
-                      return "กดเพื่อเลือกลูกค้า";
-                    })()}
-                  </Text>
-                  {customer && (
-                    <Text style={styles.selectButtonDescription}>
-                      📧 {customer.email} | 📞 {customer.tel}
-                    </Text>
-                  )}
-                </View>
-                <Text
+              <View style={styles.customerHeaderRow}>
+                <TouchableOpacity
                   style={[
-                    styles.selectButtonIcon,
-                    showCustomerDropdown && styles.selectButtonIconActive,
+                    styles.selectButton,
+                    showCustomerDropdown && styles.selectButtonActive,
+                    { flex: 1, marginRight: 8 },
                   ]}
+                  onPress={() => {
+                    setShowCustomerDropdown(!showCustomerDropdown);
+                  }}
+                  disabled={loadingCustomers}
                 >
-                  {showCustomerDropdown ? "▲" : "▼"}
-                </Text>
-              </TouchableOpacity>
+                  <View style={styles.selectButtonContent}>
+                    <Text style={styles.selectButtonLabel}>
+                      {(() => {
+                        if (loadingCustomers) return "กำลังโหลดข้อมูลลูกค้า...";
+                        if (customer)
+                          return `${customer.code} - ${customer.name}`;
+                        return "กดเพื่อเลือกลูกค้า";
+                      })()}
+                    </Text>
+                    {customer && (
+                      <Text style={styles.selectButtonDescription}>
+                        📧 {customer.email} | 📞 {customer.tel}
+                      </Text>
+                    )}
+                  </View>
+                  <Text
+                    style={[
+                      styles.selectButtonIcon,
+                      showCustomerDropdown && styles.selectButtonIconActive,
+                    ]}
+                  >
+                    {showCustomerDropdown ? "▲" : "▼"}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.reloadButton}
+                  onPress={loadCustomers}
+                  disabled={loadingCustomers}
+                >
+                  <Text style={styles.reloadButtonText}>🔄</Text>
+                </TouchableOpacity>
+              </View>
 
               {showCustomerDropdown && (
                 <View style={styles.dropdown}>
@@ -609,7 +636,10 @@ export default function ReleaseScreen() {
                   <Switch
                     value={autoEnter}
                     onValueChange={setAutoEnter}
-                    trackColor={{ false: "#E5E7EB", true: "#3B82F6" }}
+                    trackColor={{
+                      false: "#E5E7EB",
+                      true: "rgba(252, 211, 77, 1.00)",
+                    }}
                     thumbColor={autoEnter ? "#FFFFFF" : "#9CA3AF"}
                   />
                 </View>
@@ -660,7 +690,7 @@ export default function ReleaseScreen() {
             </View>
 
             {lastStatus !== "-" && (
-              <View style={styles.statusCard}>
+              <View style={styles.historyCard}>
                 <Text style={styles.statusLabel}>สแกนล่าสุด:</Text>
                 <Text style={styles.statusText}>{lastStatus}</Text>
               </View>
@@ -738,21 +768,6 @@ export default function ReleaseScreen() {
               </ScrollView>
             )}
           </View>
-
-          {/* Logout Section - At Bottom */}
-          <View style={styles.logoutSection}>
-            <TouchableOpacity
-              style={styles.bottomLogoutButton}
-              onPress={handleLogout}
-              delayPressIn={200}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.bottomLogoutButtonText}>🚪 ออกจากระบบ</Text>
-              <Text style={styles.bottomLogoutButtonHint}>
-                (กดเพื่อออกจากระบบ)
-              </Text>
-            </TouchableOpacity>
-          </View>
         </ScrollView>
       </View>
     </View>
@@ -762,22 +777,49 @@ export default function ReleaseScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#1F2937",
+    backgroundColor: "#451A03",
+  },
+  dummyButton: {
+    position: "absolute",
+    width: 1,
+    height: 1,
+    opacity: 0,
+    zIndex: -1,
+  },
+  dummyButtonContent: {
+    width: 1,
+    height: 1,
   },
   compactHeader: {
-    backgroundColor: "#374151",
+    backgroundColor: "#78350F",
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#4B5563",
+    borderBottomColor: "#B45309",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   compactHeaderContent: {
-    alignItems: "center",
+    alignItems: "flex-start",
+    flex: 1,
   },
-  compactHeaderTitle: {
-    fontSize: 16,
+  headerLogoutButton: {
+    backgroundColor: "#EF4444",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    marginLeft: 12,
+  },
+  headerLogoutText: {
+    fontSize: 12,
     fontWeight: "600",
     color: "#FFFFFF",
+  },
+  compactHeaderTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "rgba(252, 211, 77, 1.00)",
     marginBottom: 2,
   },
   compactHeaderSubtitle: {
@@ -816,8 +858,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   selectButtonActive: {
-    borderColor: "#3B82F6",
-    backgroundColor: "#EFF6FF",
+    borderColor: "rgba(252, 211, 77, 1.00)",
+    backgroundColor: "#FFFBEB",
   },
   selectButtonContent: {
     flex: 1,
@@ -833,12 +875,30 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   selectButtonIcon: {
-    fontSize: 16,
-    color: "#6B7280",
+    fontSize: 18,
+    color: "#3B82F6",
     marginLeft: 8,
   },
+  customerHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  reloadButton: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 8,
+    width: 56,
+    height: 56,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  reloadButtonText: {
+    fontSize: 20,
+  },
   selectButtonIconActive: {
-    color: "#3B82F6",
+    color: "rgba(252, 211, 77, 1.00)",
   },
   dropdown: {
     backgroundColor: "#FFFFFF",
@@ -909,7 +969,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   dropdownItemActive: {
-    backgroundColor: "#EFF6FF",
+    backgroundColor: "#FFFBEB",
   },
   dropdownItemContent: {
     flex: 1,
@@ -926,7 +986,7 @@ const styles = StyleSheet.create({
   },
   dropdownItemCheck: {
     fontSize: 18,
-    color: "#3B82F6",
+    color: "rgba(252, 211, 77, 1.00)",
     marginLeft: 8,
   },
   emptySearch: {
@@ -1025,7 +1085,7 @@ const styles = StyleSheet.create({
     color: "#9CA3AF",
   },
   submitButton: {
-    backgroundColor: "#3B82F6",
+    backgroundColor: "rgba(252, 211, 77, 1.00)",
     borderRadius: 6,
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -1056,8 +1116,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#6B7280",
   },
-  statusCard: {
-    backgroundColor: "#EFF6FF",
+  historyCard: {
+    backgroundColor: "#FFFBEB",
     borderRadius: 6,
     padding: 12,
     marginBottom: 16,
@@ -1101,7 +1161,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#F3F4F6",
   },
   historyItemLatest: {
-    backgroundColor: "#EFF6FF",
+    backgroundColor: "#FFFBEB",
   },
   historyLeft: {
     alignItems: "center",
@@ -1117,7 +1177,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   historyIconLatest: {
-    backgroundColor: "#3B82F6",
+    backgroundColor: "rgba(252, 211, 77, 1.00)",
   },
   historyIconText: {
     fontSize: 16,
@@ -1173,34 +1233,5 @@ const styles = StyleSheet.create({
   historyTime: {
     fontSize: 14,
     color: "#6B7280",
-  },
-  logoutSection: {
-    marginTop: 32,
-    paddingTop: 24,
-    borderTopWidth: 1,
-    borderTopColor: "#E5E7EB",
-  },
-  bottomLogoutButton: {
-    backgroundColor: "#EF4444",
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  bottomLogoutButtonText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#FFFFFF",
-    marginBottom: 4,
-  },
-  bottomLogoutButtonHint: {
-    fontSize: 12,
-    color: "#FECACA",
-    opacity: 0.8,
   },
 });
