@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 import AsyncStorage from "@react-native-async-storage/async-storage";
+=======
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
 import { useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useState } from "react";
@@ -13,6 +16,10 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+<<<<<<< HEAD
+=======
+import { persistAuthSession } from "../utils/auth";
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
 import api from "../utils/api";
 
 type LoginResponse = {
@@ -60,20 +67,7 @@ export default function LoginScreen() {
       console.log("Response:", response.data);
 
       if (response.data && response.data.code === 200) {
-        // บันทึก token และข้อมูล user
-        await AsyncStorage.setItem(
-          "access_token",
-          response.data.data.access_token,
-        );
-        await AsyncStorage.setItem(
-          "user_data",
-          JSON.stringify(response.data.data),
-        );
-
-        // บันทึกเวลาที่ token จะหมดอายุ
-        const expiresIn = response.data.data.expires_in || 604800; // default 7 days
-        const expiresAt = Date.now() + expiresIn * 1000;
-        await AsyncStorage.setItem("token_expires_at", expiresAt.toString());
+        const expiresAt = await persistAuthSession(response.data.data);
 
         console.log("Login success:", response.data.data);
         console.log("Token expires at:", new Date(expiresAt).toISOString());

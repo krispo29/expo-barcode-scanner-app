@@ -1,7 +1,7 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { useEffect } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { getValidAccessToken } from "../utils/auth";
 
 export default function Index() {
   const router = useRouter();
@@ -15,6 +15,7 @@ export default function Index() {
       // รอให้ Root Layout mount เสร็จก่อน
       await new Promise((resolve) => setTimeout(resolve, 100));
 
+<<<<<<< HEAD
       // ตรวจสอบว่ามี token หรือไม่
       const token = await AsyncStorage.getItem("access_token");
       const expiresAt = await AsyncStorage.getItem("token_expires_at");
@@ -34,9 +35,12 @@ export default function Index() {
       }
 
       if (isTokenValid) {
+=======
+      const token = await getValidAccessToken();
+      if (token) {
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
         router.replace("/(tabs)/receive");
       } else {
-        // ยังไม่มี token หรือ token หมดอายุ ไปหน้า login
         router.replace("/login");
       }
     } catch (error) {

@@ -1,9 +1,13 @@
+<<<<<<< HEAD
 import AsyncStorage from "@react-native-async-storage/async-storage";
+=======
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
 import { Audio as ExpoAudio } from "expo-av";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AppState,
   Alert,
   Platform,
   ScrollView,
@@ -16,6 +20,10 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+<<<<<<< HEAD
+=======
+import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
 import api from "../../utils/api";
 
 type ScanRecord = {
@@ -31,10 +39,27 @@ type ApiResponse<T = any> = {
   data: T;
 };
 
+type PendingScan = {
+  value: string;
+  mode: "auto" | "manual";
+};
+
 export default function ReceiveScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const ensureAuthenticated = useCallback(async () => {
+    const token = await getValidAccessToken();
+    if (!token) {
+      router.replace("/login");
+      return null;
+    }
 
+<<<<<<< HEAD
+=======
+    return token;
+  }, [router]);
+
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
   // Check if ready to scan
   const canScan = true;
 
@@ -84,6 +109,8 @@ export default function ReceiveScreen() {
   const unlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
   const lastScanRef = useRef({ value: "", timestamp: 0 });
+  const historyRef = useRef<ScanRecord[]>([]);
+  const pendingScanRef = useRef<PendingScan | null>(null);
 
   const inputRef = useRef<TextInput | null>(null);
 
@@ -98,9 +125,11 @@ export default function ReceiveScreen() {
   useEffect(() => {
     return () => {
       if (unlockTimer.current) clearTimeout(unlockTimer.current);
+      pendingScanRef.current = null;
     };
   }, []);
 
+<<<<<<< HEAD
   // Check authentication on mount
   useEffect(() => {
     const checkAuth = async () => {
@@ -112,6 +141,33 @@ export default function ReceiveScreen() {
     };
     checkAuth();
   }, [router]);
+=======
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
+  useEffect(() => {
+    void ensureAuthenticated();
+  }, [ensureAuthenticated]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void ensureAuthenticated();
+    }, [ensureAuthenticated]),
+  );
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        void ensureAuthenticated();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [ensureAuthenticated]);
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
 
   const handleLogout = async () => {
     // Safety: Prevent logout if a scan just happened (within 1000ms)
@@ -138,9 +194,7 @@ export default function ReceiveScreen() {
           void (async () => {
             try {
               // ลบข้อมูลการเข้าสู่ระบบ
-              await AsyncStorage.removeItem("access_token");
-              await AsyncStorage.removeItem("user_data");
-              await AsyncStorage.removeItem("token_expires_at");
+              await clearStoredAuth();
 
               // กลับไปหน้า login
               router.replace("/login");
@@ -158,6 +212,44 @@ export default function ReceiveScreen() {
     return value.trim().replaceAll(/[^a-zA-Z0-9]/g, "");
   };
 
+<<<<<<< HEAD
+=======
+  const clearInputAndRefocus = useCallback(() => {
+    setInput("");
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 200);
+  }, []);
+
+  const showReceiveAlert = useCallback(
+    (trackingNo: string, message?: string) => {
+      const normalizedMessage = message?.trim().toLowerCase() ?? "";
+      const alreadyReceived =
+        normalizedMessage.includes("already") &&
+        normalizedMessage.includes("receive");
+
+      if (alreadyReceived) {
+        Alert.alert(
+          "Tracking นี้ยิงรับแล้ว",
+          `Tracking No. ${trackingNo} ถูกยิงรับแล้ว`,
+        );
+        return;
+      }
+
+      if (message?.trim()) {
+        Alert.alert("ไม่สามารถยิงรับสินค้าได้", message.trim());
+        return;
+      }
+
+      Alert.alert(
+        "ไม่สามารถยิงรับสินค้าได้",
+        "เกิดข้อผิดพลาดในการตรวจสอบ Tracking Number",
+      );
+    },
+    [],
+  );
+
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
   const handleDetected = useCallback(
     async (rawValue: string, mode: "auto" | "manual") => {
       const normalized = normalizeTracking(rawValue);
@@ -175,17 +267,28 @@ export default function ReceiveScreen() {
 
       // ป้องกันการยิงซ้ำติดกัน (debounce)
       if (lastValue === normalized && now - lastTimestamp < 1500) {
+        clearInputAndRefocus();
         return;
       }
 
       // Check if already scanned in current session history
+<<<<<<< HEAD
       const isDuplicate = history.some((item) => item.code === normalized);
+=======
+      const isDuplicate = historyRef.current.some(
+        (item) => item.code === normalized,
+      );
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
       if (isDuplicate) {
         Alert.alert(
           "สแกนซ้ำ",
           `Tracking No. ${normalized} นี้ถูกสแกนไปแล้วในรายการปัจจุบัน`,
         );
+<<<<<<< HEAD
         setInput("");
+=======
+        clearInputAndRefocus();
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
         if (soundBeep) {
           try {
             await soundBeep.replayAsync();
@@ -193,6 +296,7 @@ export default function ReceiveScreen() {
             console.log("Error playing beep sound", err);
           }
         }
+<<<<<<< HEAD
         setTimeout(() => {
           inputRef.current?.focus();
         }, 200);
@@ -200,6 +304,16 @@ export default function ReceiveScreen() {
       }
 
       if (scannedLock) return;
+=======
+        return;
+      }
+
+      if (scannedLock) {
+        pendingScanRef.current = { value: normalized, mode };
+        clearInputAndRefocus();
+        return;
+      }
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
       setScannedLock(true);
       lastScanRef.current = { value: normalized, timestamp: now };
 
@@ -218,10 +332,8 @@ export default function ReceiveScreen() {
         const endpoint = `${apiUrl}/v1/orders/received_inbound/${normalized}`;
 
         // ดึง access token จาก storage
-        const token = await AsyncStorage.getItem("access_token");
-
+        const token = await ensureAuthenticated();
         if (!token) {
-          Alert.alert("ไม่พบ Token", "กรุณา login ใหม่อีกครั้ง");
           return;
         }
 
@@ -271,6 +383,10 @@ export default function ReceiveScreen() {
           }, 200);
         } else {
           // สแกนไม่พบข้อมูล - เล่นเสียง beep
+<<<<<<< HEAD
+=======
+          showReceiveAlert(normalized, response.data?.message);
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
           setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
           if (soundBeep) {
             try {
@@ -291,6 +407,10 @@ export default function ReceiveScreen() {
           errorMessage = error.response.data.message;
         }
 
+<<<<<<< HEAD
+=======
+        showReceiveAlert(normalized, errorMessage);
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
         setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
 
         if (soundBeep) {
@@ -306,10 +426,21 @@ export default function ReceiveScreen() {
         }, 200);
       } finally {
         if (unlockTimer.current) clearTimeout(unlockTimer.current);
-        unlockTimer.current = setTimeout(() => setScannedLock(false), 900);
+        unlockTimer.current = setTimeout(() => {
+          setScannedLock(false);
+          const pendingScan = pendingScanRef.current;
+          pendingScanRef.current = null;
+          if (pendingScan) {
+            void handleDetected(pendingScan.value, pendingScan.mode);
+          }
+        }, 150);
       }
     },
+<<<<<<< HEAD
     [canScan, scannedLock],
+=======
+    [canScan, clearInputAndRefocus, scannedLock, showReceiveAlert, soundBeep],
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
   );
 
   // ใช้กับสแกนเนอร์ฮาร์ดแวร์ (RS51 ยิงแล้วส่งตัวอักษร + Enter เข้ามา)

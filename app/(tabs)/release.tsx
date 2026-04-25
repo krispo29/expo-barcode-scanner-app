@@ -1,9 +1,13 @@
+<<<<<<< HEAD
 import AsyncStorage from "@react-native-async-storage/async-storage";
+=======
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
 import { Audio as ExpoAudio } from "expo-av";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AppState,
   Alert,
   Platform,
   ScrollView,
@@ -16,6 +20,10 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+<<<<<<< HEAD
+=======
+import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
 import api from "../../utils/api";
 
 type Customer = {
@@ -45,9 +53,23 @@ type ApiResponse<T = any> = {
   data: T;
 };
 
+type PendingScan = {
+  value: string;
+  mode: "auto" | "manual";
+};
+
 export default function ReleaseScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const ensureAuthenticated = useCallback(async () => {
+    const token = await getValidAccessToken();
+    if (!token) {
+      router.replace("/login");
+      return null;
+    }
+
+    return token;
+  }, [router]);
 
   // Customer Selection
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -102,6 +124,8 @@ export default function ReleaseScreen() {
   const unlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
   const lastScanRef = useRef({ value: "", timestamp: 0 });
+  const historyRef = useRef<ScanRecord[]>([]);
+  const pendingScanRef = useRef<PendingScan | null>(null);
 
   const inputRef = useRef<TextInput | null>(null);
 
@@ -119,6 +143,7 @@ export default function ReleaseScreen() {
     };
   }, []);
 
+<<<<<<< HEAD
   // Check authentication on mount
   useEffect(() => {
     const checkAuth = async () => {
@@ -130,12 +155,17 @@ export default function ReleaseScreen() {
     };
     checkAuth();
   }, [router]);
+=======
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
+  useEffect(() => {
+    void ensureAuthenticated();
+  }, [ensureAuthenticated]);
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
 
   // Load customers เมื่อเข้าหน้า
-  useEffect(() => {
-    loadCustomers();
-  }, []);
-
   // Auto-focus tracking input when customer is selected and dropdown is closed
   useEffect(() => {
     if (customer && !showCustomerDropdown && inputRef.current) {
@@ -146,6 +176,45 @@ export default function ReleaseScreen() {
     }
   }, [customer, showCustomerDropdown]);
 
+  const focusTrackingInput = useCallback(() => {
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 200);
+  }, []);
+
+  const clearInputAndRefocus = useCallback(() => {
+    setInput("");
+    focusTrackingInput();
+  }, [focusTrackingInput]);
+
+  const showReleaseAlert = useCallback(
+    (trackingNo: string, message?: string) => {
+      const normalizedMessage = message?.trim().toLowerCase() ?? "";
+      const alreadyReleased =
+        normalizedMessage.includes("already") &&
+        normalizedMessage.includes("release");
+
+      if (alreadyReleased) {
+        Alert.alert(
+          "Tracking นี้ยิงออกแล้ว",
+          `Tracking No. ${trackingNo} ถูกยิงออกแล้ว`,
+        );
+        return;
+      }
+
+      if (message?.trim()) {
+        Alert.alert("ไม่สามารถยิงออกสินค้าได้", message.trim());
+        return;
+      }
+
+      Alert.alert(
+        "ไม่สามารถยิงออกสินค้าได้",
+        "เกิดข้อผิดพลาดในการตรวจสอบ Tracking Number",
+      );
+    },
+    [],
+  );
+
   const loadCustomers = async () => {
     setLoadingCustomers(true);
     try {
@@ -153,10 +222,8 @@ export default function ReleaseScreen() {
       const endpoint = `${apiUrl}/v1/customers/inbound`;
 
       // ดึง access token จาก storage
-      const token = await AsyncStorage.getItem("access_token");
-
+      const token = await ensureAuthenticated();
       if (!token) {
-        Alert.alert("ไม่พบ Token", "กรุณา login ใหม่อีกครั้ง");
         return;
       }
 
@@ -194,6 +261,36 @@ export default function ReleaseScreen() {
     }
   };
 
+  useEffect(() => {
+    void loadCustomers();
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      void ensureAuthenticated().then((token) => {
+        if (token) {
+          void loadCustomers();
+        }
+      });
+    }, [ensureAuthenticated]),
+  );
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        void ensureAuthenticated().then((token) => {
+          if (token) {
+            void loadCustomers();
+          }
+        });
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [ensureAuthenticated]);
+
   const handleLogout = async () => {
     // Safety: Prevent logout if a scan just happened (within 1000ms)
     if (Date.now() - lastScanRef.current.timestamp < 1000) {
@@ -219,9 +316,7 @@ export default function ReleaseScreen() {
           void (async () => {
             try {
               // ลบข้อมูลการเข้าสู่ระบบ
-              await AsyncStorage.removeItem("access_token");
-              await AsyncStorage.removeItem("user_data");
-              await AsyncStorage.removeItem("token_expires_at");
+              await clearStoredAuth();
 
               // กลับไปหน้า login
               router.replace("/login");
@@ -262,10 +357,12 @@ export default function ReleaseScreen() {
 
       // ป้องกันการยิงซ้ำติดกัน (debounce)
       if (lastValue === normalized && now - lastTimestamp < 1500) {
+        clearInputAndRefocus();
         return;
       }
 
       // Check if already scanned in current session history
+<<<<<<< HEAD
       const isDuplicate = history.some((item) => item.code === normalized);
       if (isDuplicate) {
         Alert.alert(
@@ -273,6 +370,17 @@ export default function ReleaseScreen() {
           `Tracking No. ${normalized} นี้ถูกสแกนไปแล้วในรายการปัจจุบัน`,
         );
         setInput("");
+=======
+      const isDuplicate = historyRef.current.some(
+        (item) => item.code === normalized,
+      );
+      if (isDuplicate) {
+        Alert.alert(
+          "Tracking นี้ยิงออกแล้ว",
+          `Tracking No. ${normalized} ถูกยิงออกแล้วในรายการปัจจุบัน`,
+        );
+        clearInputAndRefocus();
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
         if (soundBeep) {
           try {
             await soundBeep.replayAsync();
@@ -280,6 +388,7 @@ export default function ReleaseScreen() {
             console.log("Error playing beep sound", err);
           }
         }
+<<<<<<< HEAD
         setTimeout(() => {
           inputRef.current?.focus();
         }, 200);
@@ -287,6 +396,16 @@ export default function ReleaseScreen() {
       }
 
       if (scannedLock) return;
+=======
+        return;
+      }
+
+      if (scannedLock) {
+        pendingScanRef.current = { value: normalized, mode };
+        clearInputAndRefocus();
+        return;
+      }
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
       setScannedLock(true);
       lastScanRef.current = { value: normalized, timestamp: now };
 
@@ -306,10 +425,8 @@ export default function ReleaseScreen() {
         const endpoint = `${apiUrl}/v1/orders/released/${normalized}?customer_code=${customer.code}`;
 
         // ดึง access token จาก storage
-        const token = await AsyncStorage.getItem("access_token");
-
+        const token = await ensureAuthenticated();
         if (!token) {
-          Alert.alert("ไม่พบ Token", "กรุณา login ใหม่อีกครั้ง");
           return;
         }
 
@@ -337,6 +454,7 @@ export default function ReleaseScreen() {
             mode,
           };
 
+          clearInputAndRefocus();
           setHistory((prev) => [record, ...prev].slice(0, 30));
           setLastStatus(`${normalized} • ${customer.name}`);
           setInput(""); // เคลียร์ค่าเก่าหลังสแกนสำเร็จ
@@ -356,6 +474,10 @@ export default function ReleaseScreen() {
           }, 200);
         } else {
           // สแกนไม่พบข้อมูล - เล่นเสียง beep
+<<<<<<< HEAD
+=======
+          showReleaseAlert(normalized, response.data?.message);
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
           setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
           if (soundBeep) {
             try {
@@ -376,6 +498,10 @@ export default function ReleaseScreen() {
           errorMessage = error.response.data.message;
         }
 
+<<<<<<< HEAD
+=======
+        showReleaseAlert(normalized, errorMessage);
+>>>>>>> 80e9c29ff9aafd53a6597cef0f2b4f98d2cd78ba
         setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
 
         if (soundBeep) {
@@ -391,10 +517,17 @@ export default function ReleaseScreen() {
         }, 200);
       } finally {
         if (unlockTimer.current) clearTimeout(unlockTimer.current);
-        unlockTimer.current = setTimeout(() => setScannedLock(false), 900);
+        unlockTimer.current = setTimeout(() => {
+          setScannedLock(false);
+          const pendingScan = pendingScanRef.current;
+          pendingScanRef.current = null;
+          if (pendingScan) {
+            void handleDetected(pendingScan.value, pendingScan.mode);
+          }
+        }, 150);
       }
     },
-    [canScan, customer, scannedLock],
+    [canScan, clearInputAndRefocus, customer, scannedLock, showReleaseAlert, soundBeep],
   );
 
   // ใช้กับสแกนเนอร์ฮาร์ดแวร์ (RS51 ยิงแล้วส่งตัวอักษร + Enter เข้ามา)
