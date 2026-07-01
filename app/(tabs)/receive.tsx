@@ -27,7 +27,7 @@ type ScanRecord = {
 };
 
 type ApiResponse<T = any> = {
-  code: number;
+  code: number | string;
   message?: string;
   data: T;
 };
@@ -37,12 +37,20 @@ type PendingScan = {
   mode: "auto" | "manual";
 };
 
-type ScanErrorKind = "duplicate" | "wrongCustomer" | "notFound" | "generic";
+type ScanErrorKind =
+  | "duplicate"
+  | "wrongCustomer"
+  | "destinationMismatch"
+  | "notFound"
+  | "generic";
 
 const SCANNER_AUTO_SUBMIT_DELAY_MS = 120;
 const SCANNER_CHAR_INTERVAL_MS = 35;
 const SCANNER_BURST_MIN_LENGTH = 4;
 const BEEP_GAP_MS = 160;
+
+const normalizeApiCode = (value?: number | string) =>
+  value === undefined ? "" : String(value).trim().toUpperCase();
 
 export default function ReceiveScreen() {
   const insets = useSafeAreaInsets();
@@ -247,18 +255,42 @@ export default function ReceiveScreen() {
 
   const playErrorSound = useCallback(
     async (kind: ScanErrorKind) => {
-      const beepCount = kind === "notFound" ? 3 : kind === "wrongCustomer" ? 2 : 1;
+      const beepCount =
+        kind === "destinationMismatch"
+          ? 4
+          : kind === "notFound"
+            ? 3
+            : kind === "wrongCustomer"
+              ? 2
+              : 1;
       await playBeepPattern(beepCount);
     },
     [playBeepPattern],
   );
 
   const showReceiveAlert = useCallback(
-    (trackingNo: string, message?: string): ScanErrorKind => {
+    (
+      trackingNo: string,
+      message?: string,
+      apiCode?: number | string,
+    ): ScanErrorKind => {
+      const code = normalizeApiCode(apiCode);
       const normalizedMessage = message?.trim().toLowerCase() ?? "";
       const alreadyReceived =
+        code === "ALREADY_RECEIVED" ||
         normalizedMessage.includes("already") &&
         normalizedMessage.includes("receive");
+      const wrongCustomer =
+        code === "WRONG_CUSTOMER" ||
+        normalizedMessage.includes("customer") ||
+        message?.includes("ลูกค้า");
+      const destinationMismatch =
+        code === "DESTINATION_COUNTRY_MISMATCH";
+      const notFound =
+        code === "NOT_FOUND" ||
+        code === "TRACKING_NOT_FOUND" ||
+        normalizedMessage.includes("not found") ||
+        message?.includes("ไม่พบ");
 
       if (alreadyReceived) {
         setLastStatus(`${trackingNo} • ยิงรับแล้ว`);
@@ -267,10 +299,13 @@ export default function ReceiveScreen() {
 
       if (message?.trim()) {
         setLastStatus(`${trackingNo} • ${message.trim()}`);
-        if (normalizedMessage.includes("customer") || message.includes("ลูกค้า")) {
+        if (wrongCustomer) {
           return "wrongCustomer";
         }
-        if (normalizedMessage.includes("not found") || message.includes("ไม่พบ")) {
+        if (destinationMismatch) {
+          return "destinationMismatch";
+        }
+        if (notFound) {
           return "notFound";
         }
         return "generic";
@@ -390,7 +425,11 @@ export default function ReceiveScreen() {
           }, 200);
         } else {
           // สแกนไม่พบข้อมูล - เล่นเสียง beep
-          const errorKind = showReceiveAlert(normalized, response.data?.message);
+          const errorKind = showReceiveAlert(
+            normalized,
+            response.data?.message,
+            response.data?.code,
+          );
           setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
           await playErrorSound(errorKind);
 
@@ -401,11 +440,12 @@ export default function ReceiveScreen() {
       } catch (error: any) {
         console.error("Scan error:", error);
         let errorMessage = "เกิดข้อผิดพลาดในการตรวจสอบ Tracking Number";
+        const errorCode = error?.response?.data?.code;
         if (error?.response?.data?.message) {
           errorMessage = error.response.data.message;
         }
 
-        const errorKind = showReceiveAlert(normalized, errorMessage);
+        const errorKind = showReceiveAlert(normalized, errorMessage, errorCode);
         setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
 
         await playErrorSound(errorKind);

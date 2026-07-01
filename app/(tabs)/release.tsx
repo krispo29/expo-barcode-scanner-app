@@ -1,3 +1,4 @@
+import * as Clipboard from "expo-clipboard";
 import { Audio as ExpoAudio } from "expo-av";
 import { useFocusEffect, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -41,22 +42,85 @@ type ScanRecord = {
 };
 
 type ApiResponse<T = any> = {
-  code: number;
+  code: number | string;
   message?: string;
   data: T;
 };
+
+type ReleaseExportData =
+  | string
+  | {
+      csv?: string;
+      downloadUrl?: string;
+      rows?: Array<{
+        customerCode?: string;
+        customer_code?: string;
+        trackingNo?: string;
+        tracking_no?: string;
+        releasedAt?: string;
+        released_at?: string;
+      }>;
+    };
 
 type PendingScan = {
   value: string;
   mode: "auto" | "manual";
 };
 
-type ScanErrorKind = "duplicate" | "wrongCustomer" | "notFound" | "generic";
+type ScanErrorKind =
+  | "duplicate"
+  | "wrongCustomer"
+  | "destinationMismatch"
+  | "notFound"
+  | "generic";
 
 const SCANNER_AUTO_SUBMIT_DELAY_MS = 120;
 const SCANNER_CHAR_INTERVAL_MS = 35;
 const SCANNER_BURST_MIN_LENGTH = 4;
 const BEEP_GAP_MS = 160;
+
+const normalizeApiCode = (value?: number | string) =>
+  value === undefined ? "" : String(value).trim().toUpperCase();
+
+const escapeCsvValue = (value: unknown) =>
+  `"${String(value ?? "").replaceAll('"', '""')}"`;
+
+const exportRowsToCsv = (
+  rows: NonNullable<Exclude<ReleaseExportData, string>["rows"]>,
+) => {
+  const header = ["customer_code", "tracking_no", "released_at"];
+  const lines = rows.map((row) =>
+    [
+      row.customerCode ?? row.customer_code,
+      row.trackingNo ?? row.tracking_no,
+      row.releasedAt ?? row.released_at,
+    ]
+      .map(escapeCsvValue)
+      .join(","),
+  );
+
+  return [header.join(","), ...lines].join("\n");
+};
+
+const getReleaseExportText = (data: ReleaseExportData) => {
+  if (typeof data === "string") {
+    return data;
+  }
+
+  if (data.csv) {
+    return data.csv;
+  }
+
+  if (data.downloadUrl) {
+    return data.downloadUrl;
+  }
+
+  if (data.rows?.length) {
+    return exportRowsToCsv(data.rows);
+  }
+
+  return "";
+};
 
 export default function ReleaseScreen() {
   const insets = useSafeAreaInsets();
@@ -90,6 +154,7 @@ export default function ReleaseScreen() {
   const [scannedLock, setScannedLock] = useState(false);
   const [history, setHistory] = useState<ScanRecord[]>([]);
   const [lastStatus, setLastStatus] = useState<string>("-");
+  const [exportingHistory, setExportingHistory] = useState(false);
 
   // Sound objects for Release: success, beep
   const [soundSuccess, setSoundSuccess] = useState<ExpoAudio.Sound>();
@@ -218,18 +283,42 @@ export default function ReleaseScreen() {
 
   const playErrorSound = useCallback(
     async (kind: ScanErrorKind) => {
-      const beepCount = kind === "notFound" ? 3 : kind === "wrongCustomer" ? 2 : 1;
+      const beepCount =
+        kind === "destinationMismatch"
+          ? 4
+          : kind === "notFound"
+            ? 3
+            : kind === "wrongCustomer"
+              ? 2
+              : 1;
       await playBeepPattern(beepCount);
     },
     [playBeepPattern],
   );
 
   const showReleaseAlert = useCallback(
-    (trackingNo: string, message?: string): ScanErrorKind => {
+    (
+      trackingNo: string,
+      message?: string,
+      apiCode?: number | string,
+    ): ScanErrorKind => {
+      const code = normalizeApiCode(apiCode);
       const normalizedMessage = message?.trim().toLowerCase() ?? "";
       const alreadyReleased =
+        code === "ALREADY_RELEASED" ||
         normalizedMessage.includes("already") &&
         normalizedMessage.includes("release");
+      const wrongCustomer =
+        code === "WRONG_CUSTOMER" ||
+        normalizedMessage.includes("customer") ||
+        message?.includes("ลูกค้า");
+      const destinationMismatch =
+        code === "DESTINATION_COUNTRY_MISMATCH";
+      const notFound =
+        code === "NOT_FOUND" ||
+        code === "TRACKING_NOT_FOUND" ||
+        normalizedMessage.includes("not found") ||
+        message?.includes("ไม่พบ");
 
       if (alreadyReleased) {
         setLastStatus(`${trackingNo} • ยิงออกแล้ว`);
@@ -238,10 +327,13 @@ export default function ReleaseScreen() {
 
       if (message?.trim()) {
         setLastStatus(`${trackingNo} • ${message.trim()}`);
-        if (normalizedMessage.includes("customer") || message.includes("ลูกค้า")) {
+        if (wrongCustomer) {
           return "wrongCustomer";
         }
-        if (normalizedMessage.includes("not found") || message.includes("ไม่พบ")) {
+        if (destinationMismatch) {
+          return "destinationMismatch";
+        }
+        if (notFound) {
           return "notFound";
         }
         return "generic";
@@ -296,6 +388,52 @@ export default function ReleaseScreen() {
       }
     } finally {
       setLoadingCustomers(false);
+    }
+  };
+
+  const handleExportReleasedHistory = async () => {
+    if (exportingHistory) return;
+
+    setExportingHistory(true);
+    try {
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+      const endpoint = `${apiUrl}/v1/orders/released/export?format=csv`;
+
+      const token = await ensureAuthenticated();
+      if (!token) {
+        return;
+      }
+
+      const response = await api.get<ApiResponse<ReleaseExportData> | string>(
+        endpoint,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "text/csv, application/json",
+          },
+        },
+      );
+      const responseData = response.data;
+      const exportText =
+        typeof responseData === "string"
+          ? responseData
+          : getReleaseExportText(responseData.data);
+
+      if (!exportText) {
+        setLastStatus("ยังไม่มีข้อมูลประวัติยิงออกสำหรับ Export");
+        return;
+      }
+
+      await Clipboard.setStringAsync(exportText);
+      setLastStatus("คัดลอกประวัติยิงออกสำหรับ Excel แล้ว");
+    } catch (error: any) {
+      console.error("Export released history error:", error);
+      setLastStatus(
+        error?.response?.data?.message ??
+          "ยังไม่สามารถ Export ประวัติยิงออกได้",
+      );
+    } finally {
+      setExportingHistory(false);
     }
   };
 
@@ -487,7 +625,11 @@ export default function ReleaseScreen() {
           }, 200);
         } else {
           // สแกนไม่พบข้อมูล - เล่นเสียง beep
-          const errorKind = showReleaseAlert(normalized, response.data?.message);
+          const errorKind = showReleaseAlert(
+            normalized,
+            response.data?.message,
+            response.data?.code,
+          );
           setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
           await playErrorSound(errorKind);
 
@@ -498,11 +640,12 @@ export default function ReleaseScreen() {
       } catch (error: any) {
         console.error("Scan error:", error);
         let errorMessage = "เกิดข้อผิดพลาดในการตรวจสอบ Tracking Number";
+        const errorCode = error?.response?.data?.code;
         if (error?.response?.data?.message) {
           errorMessage = error.response.data.message;
         }
 
-        const errorKind = showReleaseAlert(normalized, errorMessage);
+        const errorKind = showReleaseAlert(normalized, errorMessage, errorCode);
         setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
 
         await playErrorSound(errorKind);
@@ -876,7 +1019,21 @@ export default function ReleaseScreen() {
           <View style={[styles.section, styles.historySection]}>
             <View style={styles.statusHeader}>
               <Text style={styles.sectionTitle}>ประวัติการสแกน</Text>
-              <Text style={styles.historyCount}>{history.length} รายการ</Text>
+              <View style={styles.historyActions}>
+                <Text style={styles.historyCount}>{history.length} รายการ</Text>
+                <TouchableOpacity
+                  style={[
+                    styles.exportButton,
+                    exportingHistory && styles.exportButtonDisabled,
+                  ]}
+                  onPress={handleExportReleasedHistory}
+                  disabled={exportingHistory}
+                >
+                  <Text style={styles.exportButtonText}>
+                    {exportingHistory ? "Export..." : "Export CSV"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
             {lastStatus !== "-" && (
@@ -1306,9 +1463,28 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 12,
   },
+  historyActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
   historyCount: {
     fontSize: 14,
     color: "#6B7280",
+  },
+  exportButton: {
+    backgroundColor: "#1F2937",
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  exportButtonDisabled: {
+    opacity: 0.6,
+  },
+  exportButtonText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "600",
   },
   historyCard: {
     backgroundColor: "#FFFBEB",
