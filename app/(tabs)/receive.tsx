@@ -371,7 +371,7 @@ export default function ReceiveScreen() {
         console.log("Tracking No:", normalized);
 
         const apiUrl = process.env.EXPO_PUBLIC_API_URL;
-        const endpoint = `${apiUrl}/v1/orders/received_inbound/${normalized}`;
+        const endpoint = `${apiUrl}/v1/orders/received_inbound/${normalized}?device=mobile`;
 
         // ดึง access token จาก storage
         const token = await ensureAuthenticated();
