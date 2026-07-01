@@ -37,6 +37,13 @@ type PendingScan = {
   mode: "auto" | "manual";
 };
 
+type ScanErrorKind = "duplicate" | "wrongCustomer" | "notFound" | "generic";
+
+const SCANNER_AUTO_SUBMIT_DELAY_MS = 120;
+const SCANNER_CHAR_INTERVAL_MS = 35;
+const SCANNER_BURST_MIN_LENGTH = 4;
+const BEEP_GAP_MS = 160;
+
 export default function ReceiveScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -97,12 +104,34 @@ export default function ReceiveScreen() {
   }, []);
 
   const unlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
   const lastScanRef = useRef({ value: "", timestamp: 0 });
   const historyRef = useRef<ScanRecord[]>([]);
   const pendingScanRef = useRef<PendingScan | null>(null);
+  const latestInputRef = useRef("");
+  const scanBurstRef = useRef({
+    lastChangeAt: 0,
+    lastLength: 0,
+    rapidBurstCount: 0,
+  });
 
   const inputRef = useRef<TextInput | null>(null);
+
+  const clearAutoSubmitTimer = useCallback(() => {
+    if (autoSubmitTimerRef.current) {
+      clearTimeout(autoSubmitTimerRef.current);
+      autoSubmitTimerRef.current = null;
+    }
+  }, []);
+
+  const resetScanBurst = useCallback(() => {
+    scanBurstRef.current = {
+      lastChangeAt: 0,
+      lastLength: 0,
+      rapidBurstCount: 0,
+    };
+  }, []);
 
   // โฟกัสช่อง Tracking Number อัตโนมัติเมื่อเข้า screen
   useEffect(() => {
@@ -113,8 +142,13 @@ export default function ReceiveScreen() {
 
   // เคลียร์ timer ตอน unmount
   useEffect(() => {
+    latestInputRef.current = input;
+  }, [input]);
+
+  useEffect(() => {
     return () => {
       if (unlockTimer.current) clearTimeout(unlockTimer.current);
+      if (autoSubmitTimerRef.current) clearTimeout(autoSubmitTimerRef.current);
       pendingScanRef.current = null;
     };
   }, []);
@@ -189,48 +223,75 @@ export default function ReceiveScreen() {
   };
 
   const clearInputAndRefocus = useCallback(() => {
+    clearAutoSubmitTimer();
+    resetScanBurst();
     setInput("");
     setTimeout(() => {
       inputRef.current?.focus();
     }, 200);
-  }, []);
+  }, [clearAutoSubmitTimer, resetScanBurst]);
+
+  const playBeepPattern = useCallback(
+    async (count: number) => {
+      if (!soundBeep) return;
+
+      for (let index = 0; index < count; index += 1) {
+        await soundBeep.replayAsync();
+        if (index < count - 1) {
+          await new Promise((resolve) => setTimeout(resolve, BEEP_GAP_MS));
+        }
+      }
+    },
+    [soundBeep],
+  );
+
+  const playErrorSound = useCallback(
+    async (kind: ScanErrorKind) => {
+      const beepCount = kind === "notFound" ? 3 : kind === "wrongCustomer" ? 2 : 1;
+      await playBeepPattern(beepCount);
+    },
+    [playBeepPattern],
+  );
 
   const showReceiveAlert = useCallback(
-    (trackingNo: string, message?: string) => {
+    (trackingNo: string, message?: string): ScanErrorKind => {
       const normalizedMessage = message?.trim().toLowerCase() ?? "";
       const alreadyReceived =
         normalizedMessage.includes("already") &&
         normalizedMessage.includes("receive");
 
       if (alreadyReceived) {
-        Alert.alert(
-          "Tracking นี้ยิงรับแล้ว",
-          `Tracking No. ${trackingNo} ถูกยิงรับแล้ว`,
-        );
-        return;
+        setLastStatus(`${trackingNo} • ยิงรับแล้ว`);
+        return "duplicate";
       }
 
       if (message?.trim()) {
-        Alert.alert("ไม่สามารถยิงรับสินค้าได้", message.trim());
-        return;
+        setLastStatus(`${trackingNo} • ${message.trim()}`);
+        if (normalizedMessage.includes("customer") || message.includes("ลูกค้า")) {
+          return "wrongCustomer";
+        }
+        if (normalizedMessage.includes("not found") || message.includes("ไม่พบ")) {
+          return "notFound";
+        }
+        return "generic";
       }
 
-      Alert.alert(
-        "ไม่สามารถยิงรับสินค้าได้",
-        "เกิดข้อผิดพลาดในการตรวจสอบ Tracking Number",
-      );
+      setLastStatus(`${trackingNo} • ไม่สามารถยิงรับสินค้าได้`);
+      return "generic";
     },
     [],
   );
 
   const handleDetected = useCallback(
     async (rawValue: string, mode: "auto" | "manual") => {
+      clearAutoSubmitTimer();
+      resetScanBurst();
+
       const normalized = normalizeTracking(rawValue);
       if (!normalized) {
-        Alert.alert(
-          "ไม่พบ Tracking No.",
-          "ข้อมูลที่ได้ว่างเปล่าหรือไม่ใช่ตัวเลข/ตัวอักษร",
-        );
+        setLastStatus("ไม่พบ Tracking No.");
+        clearInputAndRefocus();
+        await playErrorSound("notFound");
         return;
       }
 
@@ -249,18 +310,9 @@ export default function ReceiveScreen() {
         (item) => item.code === normalized,
       );
       if (isDuplicate) {
-        Alert.alert(
-          "สแกนซ้ำ",
-          `Tracking No. ${normalized} นี้ถูกสแกนไปแล้วในรายการปัจจุบัน`,
-        );
+        setLastStatus(`${normalized} • สแกนซ้ำในเครื่องนี้`);
         clearInputAndRefocus();
-        if (soundBeep) {
-          try {
-            await soundBeep.replayAsync();
-          } catch (err) {
-            console.log("Error playing beep sound", err);
-          }
-        }
+        await playErrorSound("duplicate");
         return;
       }
 
@@ -338,15 +390,9 @@ export default function ReceiveScreen() {
           }, 200);
         } else {
           // สแกนไม่พบข้อมูล - เล่นเสียง beep
-          showReceiveAlert(normalized, response.data?.message);
+          const errorKind = showReceiveAlert(normalized, response.data?.message);
           setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
-          if (soundBeep) {
-            try {
-              await soundBeep.replayAsync();
-            } catch (err) {
-              console.log("Error playing beep sound", err);
-            }
-          }
+          await playErrorSound(errorKind);
 
           setTimeout(() => {
             inputRef.current?.focus();
@@ -359,16 +405,10 @@ export default function ReceiveScreen() {
           errorMessage = error.response.data.message;
         }
 
-        showReceiveAlert(normalized, errorMessage);
+        const errorKind = showReceiveAlert(normalized, errorMessage);
         setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
 
-        if (soundBeep) {
-          try {
-            await soundBeep.replayAsync();
-          } catch (err) {
-            console.log("Error playing beep sound", err);
-          }
-        }
+        await playErrorSound(errorKind);
 
         setTimeout(() => {
           inputRef.current?.focus();
@@ -385,7 +425,15 @@ export default function ReceiveScreen() {
         }, 150);
       }
     },
-    [canScan, clearInputAndRefocus, scannedLock, showReceiveAlert, soundBeep],
+    [
+      canScan,
+      clearAutoSubmitTimer,
+      clearInputAndRefocus,
+      playErrorSound,
+      resetScanBurst,
+      scannedLock,
+      showReceiveAlert,
+    ],
   );
 
   // ใช้กับสแกนเนอร์ฮาร์ดแวร์ (RS51 ยิงแล้วส่งตัวอักษร + Enter เข้ามา)
@@ -393,21 +441,74 @@ export default function ReceiveScreen() {
     (text: string) => {
       // Always sanitize input to prevent newline accumulation
       const sanitized = text.replaceAll(/[\r\n]/g, "");
+      const hasSubmitChar = /[\r\n]/.test(text);
+      const now = Date.now();
+      const previous = scanBurstRef.current;
+      const lengthDelta = sanitized.length - previous.lastLength;
+      const interval = now - previous.lastChangeAt;
+      const rapidAppend =
+        lengthDelta === 1 &&
+        previous.lastLength > 0 &&
+        interval > 0 &&
+        interval <= SCANNER_CHAR_INTERVAL_MS;
+      const rapidBurstCount =
+        lengthDelta > 1
+          ? sanitized.length
+          : rapidAppend
+            ? Math.max(previous.rapidBurstCount + 1, sanitized.length)
+            : sanitized.length === 1
+              ? 1
+              : 0;
 
-      if (autoEnter && /[\r\n]/.test(text)) {
+      scanBurstRef.current = {
+        lastChangeAt: now,
+        lastLength: sanitized.length,
+        rapidBurstCount,
+      };
+
+      if (hasSubmitChar) {
+        clearAutoSubmitTimer();
+        resetScanBurst();
         setInput(sanitized);
-        if (sanitized.trim()) {
+        if (autoEnter && sanitized.trim()) {
           handleDetected(sanitized, "auto");
         }
         return;
       }
+
       setInput(sanitized);
+
+      if (!autoEnter) {
+        clearAutoSubmitTimer();
+        return;
+      }
+
+      const looksLikeScanner =
+        sanitized.trim().length >= SCANNER_BURST_MIN_LENGTH &&
+        (lengthDelta > 1 || rapidBurstCount >= SCANNER_BURST_MIN_LENGTH);
+
+      if (!looksLikeScanner) {
+        clearAutoSubmitTimer();
+        return;
+      }
+
+      // Fallback for RS51 profiles that send text without an Enter suffix.
+      clearAutoSubmitTimer();
+      autoSubmitTimerRef.current = setTimeout(() => {
+        const latestValue = latestInputRef.current.trim();
+        if (!latestValue || latestValue !== sanitized.trim()) return;
+
+        resetScanBurst();
+        void handleDetected(latestValue, "auto");
+      }, SCANNER_AUTO_SUBMIT_DELAY_MS);
     },
-    [autoEnter, handleDetected],
+    [autoEnter, clearAutoSubmitTimer, handleDetected, resetScanBurst],
   );
 
   const handleManualSubmit = () => {
     if (!input.trim() || !canScan) return;
+    clearAutoSubmitTimer();
+    resetScanBurst();
     // If autoEnter is on, treat Enter key as auto scan (likely from scanner)
     // If autoEnter is off, it's definitely a manual action
     handleDetected(input, autoEnter ? "auto" : "manual");
@@ -536,8 +637,12 @@ export default function ReceiveScreen() {
                 </Text>
               </View>
             ) : (
-              <ScrollView style={styles.historyScroll}>
-                {history.slice(0, 10).map((item, index) => {
+              <ScrollView
+                style={styles.historyScroll}
+                nestedScrollEnabled
+                showsVerticalScrollIndicator
+              >
+                {history.map((item, index) => {
                   const scanTime = new Date(item.scannedAt);
                   const isLatest = index === 0;
 
