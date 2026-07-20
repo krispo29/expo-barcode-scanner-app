@@ -8,7 +8,7 @@ Restore hands-free sequential barcode scanning on the Receive and Release screen
 
 - `app/(tabs)/receive.tsx`
 - `app/(tabs)/release.tsx`
-- One shared scan-error modal component used by both screens
+- One shared scan-error modal component, with a colocated pure error-classification function, used by both screens
 - One small runnable test covering error-message classification
 
 No scanner SDK, Android broadcast integration, new dependency, batching, or background scan queue is required.
@@ -56,7 +56,7 @@ No scanner SDK, Android broadcast integration, new dependency, batching, or back
 
 - Reuse React Native's existing `Modal`; do not add a UI dependency.
 - Keep the scan flow inside the two existing screens.
-- Share only the visual error modal because both screens require identical presentation and confirmation behavior.
+- Share one scan-error module containing the identical modal presentation and its pure error-classification function. Keep submission, focus, timers, and request handling inside the two screens.
 - Do not add a generalized scanner framework, queue, context, provider, or native module.
 
 ## Verification
@@ -70,4 +70,5 @@ No scanner SDK, Android broadcast integration, new dependency, batching, or back
 - Scan an invalid/not-found barcode; the invalid-number modal appears.
 - Simulate a connection failure; the system-failure modal appears rather than the invalid-number message.
 - Press `ยืนยัน`; the modal closes and the tracking input is focused.
-- Run TypeScript validation and the focused error-classification test.
+- Run TypeScript validation with `npx tsc --noEmit`.
+- Run the focused error-classification test with `npx jest <scan-error-test-file> --runInBand` using the existing Jest configuration.
