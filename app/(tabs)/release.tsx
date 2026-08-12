@@ -24,6 +24,7 @@ import {
 } from "../components/ScanErrorModal";
 import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
 import api from "../../utils/api";
+import { getScannerTestOutcome, isScannerTestMode } from "../../utils/scannerTestMode";
 
 type Customer = {
   uuid: string;
@@ -52,13 +53,26 @@ type ApiResponse<T = any> = {
   data: T;
 };
 
-const SCANNER_AUTO_SUBMIT_DELAY_MS = 250;
+const SCANNER_AUTO_SUBMIT_DELAY_MS = 150;
 const BEEP_GAP_MS = 160;
+const TEST_CUSTOMER: Customer = {
+  uuid: "scanner-test-customer",
+  code: "TEST",
+  companyCode: "",
+  email: "",
+  name: "TEST CUSTOMER",
+  tel: "",
+  discountPointRate: 0,
+  createdAt: "",
+  totalOrder: 0,
+};
 
 export default function ReleaseScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const ensureAuthenticated = useCallback(async () => {
+    if (isScannerTestMode) return "scanner-test";
+
     const token = await getValidAccessToken();
     if (!token) {
       router.replace("/login");
@@ -122,7 +136,7 @@ export default function ReleaseScreen() {
   const autoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
   const lastScanRef = useRef({ value: "", timestamp: 0 });
-  const historyRef = useRef<ScanRecord[]>([]);
+  const scannedCodesRef = useRef(new Set<string>());
   const latestInputRef = useRef("");
   const scanInFlightRef = useRef(false);
 
@@ -150,12 +164,12 @@ export default function ReleaseScreen() {
   }, []);
 
   useEffect(() => {
-    historyRef.current = history;
-  }, [history]);
+    if (!isScannerTestMode) void ensureAuthenticated();
+  }, [ensureAuthenticated]);
 
   useEffect(() => {
-    void ensureAuthenticated();
-  }, [ensureAuthenticated]);
+    if (isScannerTestMode) setCustomer(TEST_CUSTOMER);
+  }, []);
 
   // Load customers เมื่อเข้าหน้า
   // Auto-focus tracking input when customer is selected and dropdown is closed
@@ -217,6 +231,8 @@ export default function ReleaseScreen() {
   );
 
   const loadCustomers = async () => {
+    if (isScannerTestMode) return;
+
     setLoadingCustomers(true);
     try {
       const apiUrl = process.env.EXPO_PUBLIC_API_URL;
@@ -263,11 +279,12 @@ export default function ReleaseScreen() {
   };
 
   useEffect(() => {
-    void loadCustomers();
+    if (!isScannerTestMode) void loadCustomers();
   }, []);
 
   useFocusEffect(
     useCallback(() => {
+      if (isScannerTestMode) return;
       void ensureAuthenticated().then((token) => {
         if (token) {
           void loadCustomers();
@@ -279,6 +296,7 @@ export default function ReleaseScreen() {
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
       if (nextState === "active") {
+        if (isScannerTestMode) return;
         void ensureAuthenticated().then((token) => {
           if (token) {
             void loadCustomers();
@@ -355,10 +373,7 @@ export default function ReleaseScreen() {
         return;
       }
 
-      // Check if already scanned in current session history
-      const isDuplicate = historyRef.current.some(
-        (item) => item.code === normalized,
-      );
+      const isDuplicate = scannedCodesRef.current.has(normalized);
       if (isDuplicate) {
         setLastStatus(`${normalized} • ยิงออกซ้ำในเครื่องนี้`);
         showScanError("duplicate");
@@ -373,6 +388,35 @@ export default function ReleaseScreen() {
       let modalOpened = false;
 
       try {
+        if (isScannerTestMode) {
+          const outcome = getScannerTestOutcome(normalized);
+          if (outcome !== "success") {
+            const errorKind = outcome === "invalid" ? "generic" : "system";
+            setLastStatus(`${normalized} • ${getScanErrorMessage(errorKind)}`);
+            modalOpened = true;
+            showScanError(errorKind);
+            void playErrorSound(errorKind);
+            return;
+          }
+
+          idCounter.current += 1;
+          const record: ScanRecord = {
+            id: `${Date.now()}-${idCounter.current}`,
+            customerId: customer.uuid,
+            customerCode: customer.code,
+            code: normalized,
+            scannedAt: new Date().toISOString(),
+            mode,
+          };
+          scannedCodesRef.current.add(normalized);
+          latestInputRef.current = "";
+          setHistory((prev) => [record, ...prev].slice(0, 30));
+          setLastStatus(`${normalized} • ${customer.name}`);
+          setInput("");
+          if (soundSuccess) await soundSuccess.replayAsync();
+          return;
+        }
+
         try {
           Vibration.vibrate(Platform.OS === "android" ? 30 : 200);
         } catch {
@@ -417,6 +461,7 @@ export default function ReleaseScreen() {
             mode,
           };
 
+          scannedCodesRef.current.add(normalized);
           latestInputRef.current = "";
           setHistory((prev) => [record, ...prev].slice(0, 30));
           setLastStatus(`${normalized} • ${customer.name}`);
@@ -523,6 +568,12 @@ export default function ReleaseScreen() {
       <StatusBar style="light" />
       <ScanErrorModal kind={scanError} onConfirm={confirmScanError} />
 
+      {isScannerTestMode && (
+        <View style={styles.testModeBanner}>
+          <Text style={styles.testModeBannerText}>โหมดทดสอบ — ไม่มีการบันทึกข้อมูล</Text>
+        </View>
+      )}
+
       {/* Invisible Dummy Button - To catch scanner triggers */}
       <TouchableOpacity
         style={styles.dummyButton}
@@ -564,7 +615,7 @@ export default function ReleaseScreen() {
           keyboardShouldPersistTaps="handled"
         >
           {/* Customer Selection */}
-          <View style={styles.section}>
+          {!isScannerTestMode && <View style={styles.section}>
             <Text style={styles.sectionTitle}>1. เลือกลูกค้า</Text>
             <View>
               <View style={styles.customerHeaderRow}>
@@ -694,7 +745,7 @@ export default function ReleaseScreen() {
                 </View>
               )}
             </View>
-          </View>
+          </View>}
 
           {/* Ready to Scan Notice */}
           {canScan ? (
@@ -931,6 +982,16 @@ const styles = StyleSheet.create({
   },
   controlsScrollContent: {
     padding: 20,
+  },
+  testModeBanner: {
+    alignItems: "center",
+    padding: 10,
+    backgroundColor: "#B91C1C",
+  },
+  testModeBannerText: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#FFFFFF",
   },
   section: {
     marginBottom: 24,

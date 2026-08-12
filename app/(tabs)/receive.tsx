@@ -24,6 +24,7 @@ import {
 } from "../components/ScanErrorModal";
 import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
 import api from "../../utils/api";
+import { getScannerTestOutcome, isScannerTestMode } from "../../utils/scannerTestMode";
 
 type ScanRecord = {
   id: string;
@@ -38,13 +39,15 @@ type ApiResponse<T = any> = {
   data: T;
 };
 
-const SCANNER_AUTO_SUBMIT_DELAY_MS = 250;
+const SCANNER_AUTO_SUBMIT_DELAY_MS = 150;
 const BEEP_GAP_MS = 160;
 
 export default function ReceiveScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const ensureAuthenticated = useCallback(async () => {
+    if (isScannerTestMode) return "scanner-test";
+
     const token = await getValidAccessToken();
     if (!token) {
       router.replace("/login");
@@ -104,7 +107,7 @@ export default function ReceiveScreen() {
   const autoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
   const lastScanRef = useRef({ value: "", timestamp: 0 });
-  const historyRef = useRef<ScanRecord[]>([]);
+  const scannedCodesRef = useRef(new Set<string>());
   const latestInputRef = useRef("");
   const scanInFlightRef = useRef(false);
 
@@ -132,23 +135,19 @@ export default function ReceiveScreen() {
   }, []);
 
   useEffect(() => {
-    historyRef.current = history;
-  }, [history]);
-
-  useEffect(() => {
-    void ensureAuthenticated();
+    if (!isScannerTestMode) void ensureAuthenticated();
   }, [ensureAuthenticated]);
 
   useFocusEffect(
     useCallback(() => {
-      void ensureAuthenticated();
+      if (!isScannerTestMode) void ensureAuthenticated();
     }, [ensureAuthenticated]),
   );
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
       if (nextState === "active") {
-        void ensureAuthenticated();
+        if (!isScannerTestMode) void ensureAuthenticated();
       }
     });
 
@@ -258,10 +257,7 @@ export default function ReceiveScreen() {
         return;
       }
 
-      // Check if already scanned in current session history
-      const isDuplicate = historyRef.current.some(
-        (item) => item.code === normalized,
-      );
+      const isDuplicate = scannedCodesRef.current.has(normalized);
       if (isDuplicate) {
         setLastStatus(`${normalized} • สแกนซ้ำในเครื่องนี้`);
         showScanError("duplicate");
@@ -276,6 +272,34 @@ export default function ReceiveScreen() {
       let modalOpened = false;
 
       try {
+        if (isScannerTestMode) {
+          const outcome = getScannerTestOutcome(normalized);
+          if (outcome !== "success") {
+            const errorKind = outcome === "invalid" ? "generic" : "system";
+            setLastStatus(`${normalized} • ${getScanErrorMessage(errorKind)}`);
+            modalOpened = true;
+            showScanError(errorKind);
+            void playErrorSound(errorKind);
+            return;
+          }
+
+          const shippingType = "air";
+          idCounter.current += 1;
+          const record: ScanRecord = {
+            id: `${Date.now()}-${idCounter.current}`,
+            code: normalized,
+            scannedAt: new Date().toISOString(),
+            mode,
+          };
+          scannedCodesRef.current.add(normalized);
+          setHistory((prev) => [record, ...prev].slice(0, 30));
+          setLastStatus(`${normalized} • ${shippingType.toUpperCase()}`);
+          latestInputRef.current = "";
+          setInput("");
+          if (soundAir) await soundAir.replayAsync();
+          return;
+        }
+
         try {
           Vibration.vibrate(Platform.OS === "android" ? 30 : 200);
         } catch {
@@ -320,6 +344,7 @@ export default function ReceiveScreen() {
             mode,
           };
 
+          scannedCodesRef.current.add(normalized);
           setHistory((prev) => [record, ...prev].slice(0, 30));
           setLastStatus(`${normalized} • ${shippingType.toUpperCase()}`);
           latestInputRef.current = "";
@@ -417,6 +442,12 @@ export default function ReceiveScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar style="light" />
       <ScanErrorModal kind={scanError} onConfirm={confirmScanError} />
+
+      {isScannerTestMode && (
+        <View style={styles.testModeBanner}>
+          <Text style={styles.testModeBannerText}>โหมดทดสอบ — ไม่มีการบันทึกข้อมูล</Text>
+        </View>
+      )}
 
       {/* Invisible Dummy Button - To catch scanner triggers */}
       <TouchableOpacity
@@ -669,6 +700,16 @@ const styles = StyleSheet.create({
   },
   controlsScrollContent: {
     padding: 20,
+  },
+  testModeBanner: {
+    alignItems: "center",
+    padding: 10,
+    backgroundColor: "#B91C1C",
+  },
+  testModeBannerText: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#FFFFFF",
   },
   section: {
     marginBottom: 24,

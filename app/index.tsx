@@ -2,6 +2,7 @@ import { useRouter } from "expo-router";
 import { useEffect } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { getValidAccessToken } from "../utils/auth";
+import { isScannerTestMode } from "../utils/scannerTestMode";
 
 export default function Index() {
   const router = useRouter();
@@ -12,6 +13,11 @@ export default function Index() {
 
   const checkAuthStatus = async () => {
     try {
+      if (isScannerTestMode) {
+        router.replace("/(tabs)/receive");
+        return;
+      }
+
       // รอให้ Root Layout mount เสร็จก่อน
       await new Promise((resolve) => setTimeout(resolve, 100));
 
