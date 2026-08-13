@@ -16,8 +16,15 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  classifyScanError,
+  getScanErrorMessage,
+  ScanErrorKind,
+  ScanErrorModal,
+} from "../components/ScanErrorModal";
 import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
 import api from "../../utils/api";
+import { getScannerTestOutcome, isScannerTestMode } from "../../utils/scannerTestMode";
 
 type Customer = {
   uuid: string;
@@ -46,30 +53,26 @@ type ApiResponse<T = any> = {
   data: T;
 };
 
-type PendingScan = {
-  value: string;
-  mode: "auto" | "manual";
-};
-
-type ScanErrorKind =
-  | "duplicate"
-  | "wrongCustomer"
-  | "destinationMismatch"
-  | "notFound"
-  | "generic";
-
-const SCANNER_AUTO_SUBMIT_DELAY_MS = 120;
-const SCANNER_CHAR_INTERVAL_MS = 35;
-const SCANNER_BURST_MIN_LENGTH = 4;
+const SCANNER_AUTO_SUBMIT_DELAY_MS = 150;
 const BEEP_GAP_MS = 160;
-
-const normalizeApiCode = (value?: number | string) =>
-  value === undefined ? "" : String(value).trim().toUpperCase();
+const TEST_CUSTOMER: Customer = {
+  uuid: "scanner-test-customer",
+  code: "TEST",
+  companyCode: "",
+  email: "",
+  name: "TEST CUSTOMER",
+  tel: "",
+  discountPointRate: 0,
+  createdAt: "",
+  totalOrder: 0,
+};
 
 export default function ReleaseScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const ensureAuthenticated = useCallback(async () => {
+    if (isScannerTestMode) return "scanner-test";
+
     const token = await getValidAccessToken();
     if (!token) {
       router.replace("/login");
@@ -98,6 +101,7 @@ export default function ReleaseScreen() {
   const [scannedLock, setScannedLock] = useState(false);
   const [history, setHistory] = useState<ScanRecord[]>([]);
   const [lastStatus, setLastStatus] = useState<string>("-");
+  const [scanError, setScanError] = useState<ScanErrorKind | null>(null);
 
   // Sound objects for Release: success, beep
   const [soundSuccess, setSoundSuccess] = useState<ExpoAudio.Sound>();
@@ -129,18 +133,12 @@ export default function ReleaseScreen() {
     };
   }, []);
 
-  const unlockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
   const lastScanRef = useRef({ value: "", timestamp: 0 });
-  const historyRef = useRef<ScanRecord[]>([]);
-  const pendingScanRef = useRef<PendingScan | null>(null);
+  const scannedCodesRef = useRef(new Set<string>());
   const latestInputRef = useRef("");
-  const scanBurstRef = useRef({
-    lastChangeAt: 0,
-    lastLength: 0,
-    rapidBurstCount: 0,
-  });
+  const scanInFlightRef = useRef(false);
 
   const inputRef = useRef<TextInput | null>(null);
 
@@ -149,14 +147,6 @@ export default function ReleaseScreen() {
       clearTimeout(autoSubmitTimerRef.current);
       autoSubmitTimerRef.current = null;
     }
-  }, []);
-
-  const resetScanBurst = useCallback(() => {
-    scanBurstRef.current = {
-      lastChangeAt: 0,
-      lastLength: 0,
-      rapidBurstCount: 0,
-    };
   }, []);
 
   // โฟกัสช่อง Tracking Number อัตโนมัติเมื่อเข้า screen
@@ -168,23 +158,18 @@ export default function ReleaseScreen() {
 
   // เคลียร์ timer ตอน unmount
   useEffect(() => {
-    latestInputRef.current = input;
-  }, [input]);
-
-  useEffect(() => {
     return () => {
-      if (unlockTimer.current) clearTimeout(unlockTimer.current);
       if (autoSubmitTimerRef.current) clearTimeout(autoSubmitTimerRef.current);
     };
   }, []);
 
   useEffect(() => {
-    historyRef.current = history;
-  }, [history]);
+    if (!isScannerTestMode) void ensureAuthenticated();
+  }, [ensureAuthenticated]);
 
   useEffect(() => {
-    void ensureAuthenticated();
-  }, [ensureAuthenticated]);
+    if (isScannerTestMode) setCustomer(TEST_CUSTOMER);
+  }, []);
 
   // Load customers เมื่อเข้าหน้า
   // Auto-focus tracking input when customer is selected and dropdown is closed
@@ -203,12 +188,18 @@ export default function ReleaseScreen() {
     }, 200);
   }, []);
 
-  const clearInputAndRefocus = useCallback(() => {
+  const showScanError = useCallback((kind: ScanErrorKind) => {
     clearAutoSubmitTimer();
-    resetScanBurst();
+    latestInputRef.current = "";
     setInput("");
+    inputRef.current?.blur();
+    setScanError(kind);
+  }, [clearAutoSubmitTimer]);
+
+  const confirmScanError = useCallback(() => {
+    setScanError(null);
     focusTrackingInput();
-  }, [clearAutoSubmitTimer, focusTrackingInput, resetScanBurst]);
+  }, [focusTrackingInput]);
 
   const playBeepPattern = useCallback(
     async (count: number) => {
@@ -239,56 +230,9 @@ export default function ReleaseScreen() {
     [playBeepPattern],
   );
 
-  const showReleaseAlert = useCallback(
-    (
-      trackingNo: string,
-      message?: string,
-      apiCode?: number | string,
-    ): ScanErrorKind => {
-      const code = normalizeApiCode(apiCode);
-      const normalizedMessage = message?.trim().toLowerCase() ?? "";
-      const alreadyReleased =
-        code === "ALREADY_RELEASED" ||
-        normalizedMessage.includes("already") &&
-        normalizedMessage.includes("release");
-      const wrongCustomer =
-        code === "WRONG_CUSTOMER" ||
-        normalizedMessage.includes("customer") ||
-        message?.includes("ลูกค้า");
-      const destinationMismatch =
-        code === "DESTINATION_COUNTRY_MISMATCH";
-      const notFound =
-        code === "NOT_FOUND" ||
-        code === "TRACKING_NOT_FOUND" ||
-        normalizedMessage.includes("not found") ||
-        message?.includes("ไม่พบ");
-
-      if (alreadyReleased) {
-        setLastStatus(`${trackingNo} • ยิงออกแล้ว`);
-        return "duplicate";
-      }
-
-      if (message?.trim()) {
-        setLastStatus(`${trackingNo} • ${message.trim()}`);
-        if (wrongCustomer) {
-          return "wrongCustomer";
-        }
-        if (destinationMismatch) {
-          return "destinationMismatch";
-        }
-        if (notFound) {
-          return "notFound";
-        }
-        return "generic";
-      }
-
-      setLastStatus(`${trackingNo} • ไม่สามารถยิงออกสินค้าได้`);
-      return "generic";
-    },
-    [],
-  );
-
   const loadCustomers = async () => {
+    if (isScannerTestMode) return;
+
     setLoadingCustomers(true);
     try {
       const apiUrl = process.env.EXPO_PUBLIC_API_URL;
@@ -335,11 +279,12 @@ export default function ReleaseScreen() {
   };
 
   useEffect(() => {
-    void loadCustomers();
+    if (!isScannerTestMode) void loadCustomers();
   }, []);
 
   useFocusEffect(
     useCallback(() => {
+      if (isScannerTestMode) return;
       void ensureAuthenticated().then((token) => {
         if (token) {
           void loadCustomers();
@@ -351,6 +296,7 @@ export default function ReleaseScreen() {
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
       if (nextState === "active") {
+        if (isScannerTestMode) return;
         void ensureAuthenticated().then((token) => {
           if (token) {
             void loadCustomers();
@@ -410,12 +356,11 @@ export default function ReleaseScreen() {
   const handleDetected = useCallback(
     async (rawValue: string, mode: "auto" | "manual") => {
       clearAutoSubmitTimer();
-      resetScanBurst();
 
       // Check if customer is selected
       if (!canScan || !customer) {
         setLastStatus("กรุณาเลือกลูกค้าก่อนสแกน");
-        clearInputAndRefocus();
+        showScanError("wrongCustomer");
         await playErrorSound("wrongCustomer");
         return;
       }
@@ -423,41 +368,55 @@ export default function ReleaseScreen() {
       const normalized = normalizeTracking(rawValue);
       if (!normalized) {
         setLastStatus("ไม่พบ Tracking No.");
-        clearInputAndRefocus();
+        showScanError("notFound");
         await playErrorSound("notFound");
         return;
       }
 
-      const now = Date.now();
-      const { value: lastValue, timestamp: lastTimestamp } =
-        lastScanRef.current;
-
-      // ป้องกันการยิงซ้ำติดกัน (debounce)
-      if (lastValue === normalized && now - lastTimestamp < 1500) {
-        clearInputAndRefocus();
-        return;
-      }
-
-      // Check if already scanned in current session history
-      const isDuplicate = historyRef.current.some(
-        (item) => item.code === normalized,
-      );
+      const isDuplicate = scannedCodesRef.current.has(normalized);
       if (isDuplicate) {
         setLastStatus(`${normalized} • ยิงออกซ้ำในเครื่องนี้`);
-        clearInputAndRefocus();
+        showScanError("duplicate");
         await playErrorSound("duplicate");
         return;
       }
 
-      if (scannedLock) {
-        pendingScanRef.current = { value: normalized, mode };
-        clearInputAndRefocus();
-        return;
-      }
+      if (scanInFlightRef.current) return;
+      scanInFlightRef.current = true;
       setScannedLock(true);
-      lastScanRef.current = { value: normalized, timestamp: now };
+      lastScanRef.current = { value: normalized, timestamp: Date.now() };
+      let modalOpened = false;
 
       try {
+        if (isScannerTestMode) {
+          const outcome = getScannerTestOutcome(normalized);
+          if (outcome !== "success") {
+            const errorKind = outcome === "invalid" ? "generic" : "system";
+            setLastStatus(`${normalized} • ${getScanErrorMessage(errorKind)}`);
+            modalOpened = true;
+            showScanError(errorKind);
+            void playErrorSound(errorKind);
+            return;
+          }
+
+          idCounter.current += 1;
+          const record: ScanRecord = {
+            id: `${Date.now()}-${idCounter.current}`,
+            customerId: customer.uuid,
+            customerCode: customer.code,
+            code: normalized,
+            scannedAt: new Date().toISOString(),
+            mode,
+          };
+          scannedCodesRef.current.add(normalized);
+          latestInputRef.current = "";
+          setHistory((prev) => [record, ...prev].slice(0, 30));
+          setLastStatus(`${normalized} • ${customer.name}`);
+          setInput("");
+          if (soundSuccess) await soundSuccess.replayAsync();
+          return;
+        }
+
         try {
           Vibration.vibrate(Platform.OS === "android" ? 30 : 200);
         } catch {
@@ -502,7 +461,8 @@ export default function ReleaseScreen() {
             mode,
           };
 
-          clearInputAndRefocus();
+          scannedCodesRef.current.add(normalized);
+          latestInputRef.current = "";
           setHistory((prev) => [record, ...prev].slice(0, 30));
           setLastStatus(`${normalized} • ${customer.name}`);
           setInput(""); // เคลียร์ค่าเก่าหลังสแกนสำเร็จ
@@ -515,24 +475,16 @@ export default function ReleaseScreen() {
               console.log("Error playing success sound", err);
             }
           }
-
-          // Refocus input
-          setTimeout(() => {
-            inputRef.current?.focus();
-          }, 200);
         } else {
           // สแกนไม่พบข้อมูล - เล่นเสียง beep
-          const errorKind = showReleaseAlert(
-            normalized,
+          const errorKind = classifyScanError(
             response.data?.message,
             response.data?.code,
           );
-          setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
-          await playErrorSound(errorKind);
-
-          setTimeout(() => {
-            inputRef.current?.focus();
-          }, 200);
+          setLastStatus(`${normalized} • ${getScanErrorMessage(errorKind)}`);
+          modalOpened = true;
+          showScanError(errorKind);
+          void playErrorSound(errorKind);
         }
       } catch (error: any) {
         console.error("Scan error:", error);
@@ -542,114 +494,66 @@ export default function ReleaseScreen() {
           errorMessage = error.response.data.message;
         }
 
-        const errorKind = showReleaseAlert(normalized, errorMessage, errorCode);
-        setInput(""); // เคลียร์ข้อความที่ค้างอยู่เพื่อให้ยิงกล่องต่อไปได้
-
-        await playErrorSound(errorKind);
-
-        setTimeout(() => {
-          inputRef.current?.focus();
-        }, 200);
+        const status = Number(error?.response?.status);
+        const systemFailure =
+          !error?.response || status === 401 || status === 403 || status >= 500;
+        const errorKind = classifyScanError(
+          errorMessage,
+          errorCode,
+          systemFailure,
+        );
+        setLastStatus(`${normalized} • ${getScanErrorMessage(errorKind)}`);
+        modalOpened = true;
+        showScanError(errorKind);
+        void playErrorSound(errorKind);
       } finally {
-        if (unlockTimer.current) clearTimeout(unlockTimer.current);
-        unlockTimer.current = setTimeout(() => {
-          setScannedLock(false);
-          const pendingScan = pendingScanRef.current;
-          pendingScanRef.current = null;
-          if (pendingScan) {
-            void handleDetected(pendingScan.value, pendingScan.mode);
-          }
-        }, 150);
+        scanInFlightRef.current = false;
+        setScannedLock(false);
+        if (!modalOpened) focusTrackingInput();
       }
     },
     [
       canScan,
       clearAutoSubmitTimer,
-      clearInputAndRefocus,
       customer,
+      focusTrackingInput,
       playErrorSound,
-      resetScanBurst,
-      scannedLock,
-      showReleaseAlert,
+      showScanError,
     ],
   );
 
   // ใช้กับสแกนเนอร์ฮาร์ดแวร์ (RS51 ยิงแล้วส่งตัวอักษร + Enter เข้ามา)
   const handleInputChange = useCallback(
     (text: string) => {
-      // Always sanitize input to prevent newline accumulation
+      if (scanInFlightRef.current || scanError !== null) return;
+
       const sanitized = text.replaceAll(/[\r\n]/g, "");
       const hasSubmitChar = /[\r\n]/.test(text);
-      const now = Date.now();
-      const previous = scanBurstRef.current;
-      const lengthDelta = sanitized.length - previous.lastLength;
-      const interval = now - previous.lastChangeAt;
-      const rapidAppend =
-        lengthDelta === 1 &&
-        previous.lastLength > 0 &&
-        interval > 0 &&
-        interval <= SCANNER_CHAR_INTERVAL_MS;
-      const rapidBurstCount =
-        lengthDelta > 1
-          ? sanitized.length
-          : rapidAppend
-            ? Math.max(previous.rapidBurstCount + 1, sanitized.length)
-            : sanitized.length === 1
-              ? 1
-              : 0;
-
-      scanBurstRef.current = {
-        lastChangeAt: now,
-        lastLength: sanitized.length,
-        rapidBurstCount,
-      };
-
-      if (hasSubmitChar) {
-        clearAutoSubmitTimer();
-        resetScanBurst();
-        setInput(sanitized);
-        if (autoEnter && sanitized.trim()) {
-          handleDetected(sanitized, "auto");
-        }
-        return;
-      }
-
+      latestInputRef.current = sanitized;
       setInput(sanitized);
-
-      if (!autoEnter) {
-        clearAutoSubmitTimer();
-        return;
-      }
-
-      const looksLikeScanner =
-        sanitized.trim().length >= SCANNER_BURST_MIN_LENGTH &&
-        (lengthDelta > 1 || rapidBurstCount >= SCANNER_BURST_MIN_LENGTH);
-
-      if (!looksLikeScanner) {
-        clearAutoSubmitTimer();
-        return;
-      }
-
-      // Fallback for RS51 profiles that send text without an Enter suffix.
       clearAutoSubmitTimer();
+
+      if (!autoEnter || !sanitized.trim()) return;
+      if (hasSubmitChar) {
+        void handleDetected(sanitized, "auto");
+        return;
+      }
+
       autoSubmitTimerRef.current = setTimeout(() => {
         const latestValue = latestInputRef.current.trim();
-        if (!latestValue || latestValue !== sanitized.trim()) return;
-
-        resetScanBurst();
-        void handleDetected(latestValue, "auto");
+        if (latestValue === sanitized.trim()) {
+          void handleDetected(latestValue, "auto");
+        }
       }, SCANNER_AUTO_SUBMIT_DELAY_MS);
     },
-    [autoEnter, clearAutoSubmitTimer, handleDetected, resetScanBurst],
+    [autoEnter, clearAutoSubmitTimer, handleDetected, scanError],
   );
 
   const handleManualSubmit = () => {
-    if (!input.trim() || !canScan) return;
+    const trackingNumber = latestInputRef.current;
+    if (!trackingNumber.trim() || !canScan) return;
     clearAutoSubmitTimer();
-    resetScanBurst();
-    // If autoEnter is on, treat Enter key as auto scan (likely from scanner)
-    // If autoEnter is off, it's definitely a manual action
-    handleDetected(input, autoEnter ? "auto" : "manual");
+    void handleDetected(trackingNumber, autoEnter ? "auto" : "manual");
   };
 
   // Filter customers
@@ -663,6 +567,13 @@ export default function ReleaseScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar style="light" />
+      <ScanErrorModal kind={scanError} onConfirm={confirmScanError} />
+
+      {isScannerTestMode && (
+        <View style={styles.testModeBanner}>
+          <Text style={styles.testModeBannerText}>โหมดทดสอบ — ไม่มีการบันทึกข้อมูล</Text>
+        </View>
+      )}
 
       {/* Invisible Dummy Button - To catch scanner triggers */}
       <TouchableOpacity
@@ -705,7 +616,7 @@ export default function ReleaseScreen() {
           keyboardShouldPersistTaps="handled"
         >
           {/* Customer Selection */}
-          <View style={styles.section}>
+          {!isScannerTestMode && <View style={styles.section}>
             <Text style={styles.sectionTitle}>1. เลือกลูกค้า</Text>
             <View>
               <View style={styles.customerHeaderRow}>
@@ -835,7 +746,7 @@ export default function ReleaseScreen() {
                 </View>
               )}
             </View>
-          </View>
+          </View>}
 
           {/* Ready to Scan Notice */}
           {canScan ? (
@@ -892,7 +803,8 @@ export default function ReleaseScreen() {
                   returnKeyType="done"
                   placeholderTextColor="#9CA3AF"
                   autoCorrect={false}
-                  editable={canScan}
+                  editable={canScan && !scannedLock && scanError === null}
+                  submitBehavior="submit"
                   onSubmitEditing={autoEnter ? handleManualSubmit : undefined}
                 />
                 {!autoEnter && (
@@ -1071,6 +983,16 @@ const styles = StyleSheet.create({
   },
   controlsScrollContent: {
     padding: 20,
+  },
+  testModeBanner: {
+    alignItems: "center",
+    padding: 10,
+    backgroundColor: "#B91C1C",
+  },
+  testModeBannerText: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#FFFFFF",
   },
   section: {
     marginBottom: 24,

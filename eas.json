@@ -26,6 +26,17 @@
         "gradleCommand": ":app:assembleRelease"
       }
     },
+    "scanner-test": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SCANNER_TEST_MODE": "true"
+      },
+      "android": {
+        "buildType": "apk",
+        "image": "ubuntu-22.04-jdk-17-ndk-r26b",
+        "gradleCommand": ":app:assembleRelease"
+      }
+    },
     "production": {
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api-app.ship2cu.com"
