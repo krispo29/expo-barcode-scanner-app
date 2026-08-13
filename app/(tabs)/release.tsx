@@ -550,9 +550,10 @@ export default function ReleaseScreen() {
   );
 
   const handleManualSubmit = () => {
-    if (!input.trim() || !canScan) return;
+    const trackingNumber = latestInputRef.current;
+    if (!trackingNumber.trim() || !canScan) return;
     clearAutoSubmitTimer();
-    void handleDetected(input, autoEnter ? "auto" : "manual");
+    void handleDetected(trackingNumber, autoEnter ? "auto" : "manual");
   };
 
   // Filter customers
