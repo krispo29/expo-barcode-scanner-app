@@ -1,5 +1,8 @@
 import { describe, expect, test } from "@jest/globals";
-import { classifyScanError, getScanErrorMessage } from "./ScanErrorModal";
+import {
+  classifyScanError,
+  getScanErrorMessage,
+} from "../../app/components/ScanErrorModal";
 
 describe("scan error classification", () => {
   test.each(["ALREADY_RECEIVED", "ALREADY_RELEASED"])(

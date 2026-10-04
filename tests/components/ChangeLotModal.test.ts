@@ -3,7 +3,7 @@ import {
   extractOriginalLot,
   findLotByCodeOrRef,
   isLotMismatchError,
-} from "./ChangeLotModal";
+} from "../../app/components/ChangeLotModal";
 
 describe("ChangeLotModal helpers", () => {
   test("detects lot mismatch error message", () => {
