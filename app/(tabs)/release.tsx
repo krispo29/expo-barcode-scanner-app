@@ -12,7 +12,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  Vibration,
+  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,9 +22,18 @@ import {
   ScanErrorKind,
   ScanErrorModal,
 } from "../components/ScanErrorModal";
+import {
+  GlanceableHeroBanner,
+  GlanceableHeroBannerProps,
+} from "../components/GlanceableHeroBanner";
+import { TrackingCodeText } from "../components/TrackingCodeText";
 import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
 import api from "../../utils/api";
 import { getScannerTestOutcome, isScannerTestMode } from "../../utils/scannerTestMode";
+import {
+  triggerErrorHaptic,
+  triggerSuccessHaptic,
+} from "../../utils/haptics";
 
 type Customer = {
   uuid: string;
@@ -87,14 +96,19 @@ export default function ReleaseScreen() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loadingCustomers, setLoadingCustomers] = useState(false);
 
-  // Check if ready to scan
-  const canScan = customer !== null;
-
   // Dropdown states
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
 
   // Search states
   const [customerSearch, setCustomerSearch] = useState("");
+
+  // QoL States (Keyboard suppression & Hero Banner)
+  const [showSoftKeyboard, setShowSoftKeyboard] = useState(false);
+  const [isInputFocused, setIsInputFocused] = useState(false);
+  const [heroBanner, setHeroBanner] = useState<GlanceableHeroBannerProps | null>(null);
+
+  // Check if ready to scan
+  const canScan = customer !== null;
 
   const [autoEnter, setAutoEnter] = useState(true);
   const [input, setInput] = useState("");
@@ -125,7 +139,7 @@ export default function ReleaseScreen() {
       }
     }
 
-    loadSounds();
+    void loadSounds();
 
     return () => {
       soundSuccess?.unloadAsync();
@@ -149,12 +163,18 @@ export default function ReleaseScreen() {
     }
   }, []);
 
+  const focusTrackingInput = useCallback(() => {
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 150);
+  }, []);
+
   // โฟกัสช่อง Tracking Number อัตโนมัติเมื่อเข้า screen
   useEffect(() => {
     if (inputRef.current) {
-      inputRef.current.focus();
+      focusTrackingInput();
     }
-  }, []);
+  }, [focusTrackingInput]);
 
   // เคลียร์ timer ตอน unmount
   useEffect(() => {
@@ -168,25 +188,24 @@ export default function ReleaseScreen() {
   }, [ensureAuthenticated]);
 
   useEffect(() => {
-    if (isScannerTestMode) setCustomer(TEST_CUSTOMER);
+    if (isScannerTestMode) {
+      setCustomer(TEST_CUSTOMER);
+      setHeroBanner({
+        statusType: "idle",
+        title: `พร้อมสแกน: ${TEST_CUSTOMER.name}`,
+        subtitle: "โหมดทดสอบ — สามารถยิงบาร์โค้ดได้ทันที",
+        badgeLabel: TEST_CUSTOMER.code,
+        badgeType: "default",
+      });
+    }
   }, []);
 
-  // Load customers เมื่อเข้าหน้า
   // Auto-focus tracking input when customer is selected and dropdown is closed
   useEffect(() => {
     if (customer && !showCustomerDropdown && inputRef.current) {
-      // Small timeout to ensure UI is ready
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 100);
+      focusTrackingInput();
     }
-  }, [customer, showCustomerDropdown]);
-
-  const focusTrackingInput = useCallback(() => {
-    setTimeout(() => {
-      inputRef.current?.focus();
-    }, 200);
-  }, []);
+  }, [customer, focusTrackingInput, showCustomerDropdown]);
 
   const showScanError = useCallback((kind: ScanErrorKind) => {
     clearAutoSubmitTimer();
@@ -238,7 +257,6 @@ export default function ReleaseScreen() {
       const apiUrl = process.env.EXPO_PUBLIC_API_URL;
       const endpoint = `${apiUrl}/v1/customers/inbound`;
 
-      // ดึง access token จาก storage
       const token = await ensureAuthenticated();
       if (!token) {
         return;
@@ -258,50 +276,32 @@ export default function ReleaseScreen() {
       if (response.data && response.data.code === 200) {
         setCustomers(response.data.data);
       } else {
-        Alert.alert(
-          "ไม่สามารถโหลดข้อมูลลูกค้าได้",
-          response.data.message || "กรุณาลองใหม่อีกครั้ง",
-        );
+        console.error("Failed to load customers:", response.data.message);
       }
-    } catch (error: any) {
-      console.error("Load customers error:", error);
-      if (error?.response?.status === 401) {
-        Alert.alert("ไม่ได้รับอนุญาต", "กรุณา login ใหม่อีกครั้ง");
-      } else {
-        Alert.alert(
-          "ไม่สามารถโหลดข้อมูลลูกค้าได้",
-          "เกิดข้อผิดพลาดในการเชื่อมต่อ กรุณาลองใหม่อีกครั้ง",
-        );
-      }
+    } catch (error) {
+      console.error("Error loading customers:", error);
     } finally {
       setLoadingCustomers(false);
     }
   };
 
   useEffect(() => {
-    if (!isScannerTestMode) void loadCustomers();
+    loadCustomers();
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      if (isScannerTestMode) return;
-      void ensureAuthenticated().then((token) => {
-        if (token) {
-          void loadCustomers();
-        }
-      });
+      if (!isScannerTestMode) {
+        void ensureAuthenticated();
+        loadCustomers();
+      }
     }, [ensureAuthenticated]),
   );
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
       if (nextState === "active") {
-        if (isScannerTestMode) return;
-        void ensureAuthenticated().then((token) => {
-          if (token) {
-            void loadCustomers();
-          }
-        });
+        if (!isScannerTestMode) void ensureAuthenticated();
       }
     });
 
@@ -311,13 +311,11 @@ export default function ReleaseScreen() {
   }, [ensureAuthenticated]);
 
   const handleLogout = async () => {
-    // Safety: Prevent logout if a scan just happened (within 1000ms)
     if (Date.now() - lastScanRef.current.timestamp < 1000) {
       console.log("Logout blocked - recent scan detected");
       return;
     }
 
-    // Safety: Prevent logout if input is focused (likely phantom click from scanner Enter key)
     if (inputRef.current?.isFocused()) {
       console.log("Logout blocked - input is focused");
       return;
@@ -334,10 +332,7 @@ export default function ReleaseScreen() {
         onPress: () => {
           void (async () => {
             try {
-              // ลบข้อมูลการเข้าสู่ระบบ
               await clearStoredAuth();
-
-              // กลับไปหน้า login
               router.replace("/login");
             } catch (error) {
               console.error("Logout error:", error);
@@ -360,7 +355,15 @@ export default function ReleaseScreen() {
       // Check if customer is selected
       if (!canScan || !customer) {
         setLastStatus("กรุณาเลือกลูกค้าก่อนสแกน");
+        setHeroBanner({
+          statusType: "error",
+          title: "ยังไม่ได้เลือกลูกค้า",
+          badgeLabel: "NO CUSTOMER",
+          badgeType: "error",
+          subtitle: "กรุณาเลือกลูกค้าด้านบนก่อนเริ่มสแกน",
+        });
         showScanError("wrongCustomer");
+        triggerErrorHaptic();
         await playErrorSound("wrongCustomer");
         return;
       }
@@ -369,6 +372,7 @@ export default function ReleaseScreen() {
       if (!normalized) {
         setLastStatus("ไม่พบ Tracking No.");
         showScanError("notFound");
+        triggerErrorHaptic();
         await playErrorSound("notFound");
         return;
       }
@@ -376,7 +380,16 @@ export default function ReleaseScreen() {
       const isDuplicate = scannedCodesRef.current.has(normalized);
       if (isDuplicate) {
         setLastStatus(`${normalized} • ยิงออกซ้ำในเครื่องนี้`);
+        setHeroBanner({
+          statusType: "error",
+          title: "ยิงออกซ้ำแล้ว!",
+          trackingCode: normalized,
+          badgeLabel: "DUPLICATE",
+          badgeType: "error",
+          subtitle: "รายการนี้ถูกยิงปล่อยออกไปแล้ว",
+        });
         showScanError("duplicate");
+        triggerErrorHaptic();
         await playErrorSound("duplicate");
         return;
       }
@@ -393,8 +406,17 @@ export default function ReleaseScreen() {
           if (outcome !== "success") {
             const errorKind = outcome === "invalid" ? "generic" : "system";
             setLastStatus(`${normalized} • ${getScanErrorMessage(errorKind)}`);
+            setHeroBanner({
+              statusType: "error",
+              title: getScanErrorMessage(errorKind),
+              trackingCode: normalized,
+              badgeLabel: errorKind.toUpperCase(),
+              badgeType: "error",
+              subtitle: "กรุณากดยืนยันเพื่อดำเนินการต่อ",
+            });
             modalOpened = true;
             showScanError(errorKind);
+            triggerErrorHaptic();
             void playErrorSound(errorKind);
             return;
           }
@@ -412,18 +434,20 @@ export default function ReleaseScreen() {
           latestInputRef.current = "";
           setHistory((prev) => [record, ...prev].slice(0, 30));
           setLastStatus(`${normalized} • ${customer.name}`);
+          setHeroBanner({
+            statusType: "success",
+            title: "ปล่อยออกสำเร็จ",
+            trackingCode: normalized,
+            badgeLabel: customer.code,
+            badgeType: "success",
+            subtitle: `${customer.name} • ${new Date().toLocaleTimeString("th-TH")}`,
+          });
+          triggerSuccessHaptic();
           setInput("");
           if (soundSuccess) await soundSuccess.replayAsync();
           return;
         }
 
-        try {
-          Vibration.vibrate(Platform.OS === "android" ? 30 : 200);
-        } catch {
-          // บางเครื่องอาจไม่รองรับการสั่น
-        }
-
-        // เรียก API เพื่อตรวจสอบ tracking number
         console.log("=== Scan Request ===");
         console.log("Tracking No:", normalized);
         console.log("Customer Code:", customer.code);
@@ -431,7 +455,6 @@ export default function ReleaseScreen() {
         const apiUrl = process.env.EXPO_PUBLIC_API_URL;
         const endpoint = `${apiUrl}/v1/orders/released/${normalized}?customer_code=${customer.code}&device=mobile`;
 
-        // ดึง access token จาก storage
         const token = await ensureAuthenticated();
         if (!token) {
           return;
@@ -450,7 +473,6 @@ export default function ReleaseScreen() {
         console.log("Response:", response.data);
 
         if (response.data && response.data.code === 200) {
-          // สแกนสำเร็จ
           idCounter.current += 1;
           const record: ScanRecord = {
             id: `${Date.now()}-${idCounter.current}`,
@@ -465,9 +487,17 @@ export default function ReleaseScreen() {
           latestInputRef.current = "";
           setHistory((prev) => [record, ...prev].slice(0, 30));
           setLastStatus(`${normalized} • ${customer.name}`);
-          setInput(""); // เคลียร์ค่าเก่าหลังสแกนสำเร็จ
+          setHeroBanner({
+            statusType: "success",
+            title: "ปล่อยออกสำเร็จ",
+            trackingCode: normalized,
+            badgeLabel: customer.code,
+            badgeType: "success",
+            subtitle: `${customer.name} • ${new Date().toLocaleTimeString("th-TH")}`,
+          });
+          triggerSuccessHaptic();
+          setInput("");
 
-          // สแกนสำเร็จ
           if (soundSuccess) {
             try {
               await soundSuccess.replayAsync();
@@ -476,14 +506,22 @@ export default function ReleaseScreen() {
             }
           }
         } else {
-          // สแกนไม่พบข้อมูล - เล่นเสียง beep
           const errorKind = classifyScanError(
             response.data?.message,
             response.data?.code,
           );
           setLastStatus(`${normalized} • ${getScanErrorMessage(errorKind)}`);
+          setHeroBanner({
+            statusType: "error",
+            title: getScanErrorMessage(errorKind),
+            trackingCode: normalized,
+            badgeLabel: errorKind.toUpperCase(),
+            badgeType: "error",
+            subtitle: errorKind === "wrongCustomer" ? "ลูกค้าไม่ตรงกับที่เลือกไว้" : "กรุณากดยืนยันเพื่อดำเนินการต่อ",
+          });
           modalOpened = true;
           showScanError(errorKind);
+          triggerErrorHaptic();
           void playErrorSound(errorKind);
         }
       } catch (error: any) {
@@ -503,8 +541,17 @@ export default function ReleaseScreen() {
           systemFailure,
         );
         setLastStatus(`${normalized} • ${getScanErrorMessage(errorKind)}`);
+        setHeroBanner({
+          statusType: "error",
+          title: getScanErrorMessage(errorKind),
+          trackingCode: normalized,
+          badgeLabel: "ERROR",
+          badgeType: "error",
+          subtitle: errorMessage,
+        });
         modalOpened = true;
         showScanError(errorKind);
+        triggerErrorHaptic();
         void playErrorSound(errorKind);
       } finally {
         scanInFlightRef.current = false;
@@ -516,9 +563,11 @@ export default function ReleaseScreen() {
       canScan,
       clearAutoSubmitTimer,
       customer,
+      ensureAuthenticated,
       focusTrackingInput,
       playErrorSound,
       showScanError,
+      soundSuccess,
     ],
   );
 
@@ -565,365 +614,416 @@ export default function ReleaseScreen() {
   );
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <StatusBar style="light" />
-      <ScanErrorModal kind={scanError} onConfirm={confirmScanError} />
+    <TouchableWithoutFeedback onPress={focusTrackingInput} accessible={false}>
+      <View style={[styles.container, { paddingTop: insets.top }]}>
+        <StatusBar style="light" />
+        <ScanErrorModal kind={scanError} onConfirm={confirmScanError} />
 
-      {isScannerTestMode && (
-        <View style={styles.testModeBanner}>
-          <Text style={styles.testModeBannerText}>โหมดทดสอบ — ไม่มีการบันทึกข้อมูล</Text>
-        </View>
-      )}
+        {isScannerTestMode && (
+          <View style={styles.testModeBanner}>
+            <Text style={styles.testModeBannerText}>โหมดทดสอบ — ไม่มีการบันทึกข้อมูล</Text>
+          </View>
+        )}
 
-      {/* Invisible Dummy Button - To catch scanner triggers */}
-      <TouchableOpacity
-        style={styles.dummyButton}
-        onPress={() => {
-          // Do absolutely nothing - just absorb the scanner trigger
-          console.log("Dummy button triggered - ignoring");
-        }}
-        activeOpacity={1}
-      >
-        <View style={styles.dummyButtonContent} />
-      </TouchableOpacity>
-
-      {/* Compact Header - App Title + Logout */}
-      <View style={styles.compactHeader}>
-        <View style={styles.compactHeaderContent}>
-          <Text style={styles.compactHeaderTitle}>📤 SHIP2CU Release</Text>
-        </View>
+        {/* Invisible Dummy Button - To catch scanner triggers */}
         <TouchableOpacity
-          style={styles.headerLogoutButton}
-          onPress={handleLogout}
-          delayPressIn={200}
-          activeOpacity={0.7}
+          style={styles.dummyButton}
+          onPress={() => {
+            console.log("Dummy button triggered - ignoring");
+          }}
+          activeOpacity={1}
         >
-          <Text style={styles.headerLogoutText}>ออกจากระบบ</Text>
+          <View style={styles.dummyButtonContent} />
         </TouchableOpacity>
-      </View>
 
-      {/* Bottom Panel (Scrollable) */}
-      <View
-        style={[
-          styles.controlsPanel,
-          { paddingBottom: insets.bottom + 20, flex: 1 },
-        ]}
-      >
-        <ScrollView
-          style={styles.controlsScroll}
-          contentContainerStyle={styles.controlsScrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
+        {/* Compact Header - App Title + Logout */}
+        <View style={styles.compactHeader}>
+          <View style={styles.compactHeaderContent}>
+            <Text style={styles.compactHeaderTitle}>📤 SHIP2CU Release</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.headerLogoutButton}
+            onPress={handleLogout}
+            delayPressIn={200}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.headerLogoutText}>ออกจากระบบ</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Bottom Panel (Scrollable) */}
+        <View
+          style={[
+            styles.controlsPanel,
+            { paddingBottom: insets.bottom + 20, flex: 1 },
+          ]}
         >
-          {/* Customer Selection */}
-          {!isScannerTestMode && <View style={styles.section}>
-            <Text style={styles.sectionTitle}>1. เลือกลูกค้า</Text>
-            <View>
-              <View style={styles.customerHeaderRow}>
-                <TouchableOpacity
-                  style={[
-                    styles.selectButton,
-                    showCustomerDropdown && styles.selectButtonActive,
-                    { flex: 1, marginRight: 8 },
-                  ]}
-                  onPress={() => {
-                    setShowCustomerDropdown(!showCustomerDropdown);
-                  }}
-                  disabled={loadingCustomers}
-                >
-                  <View style={styles.selectButtonContent}>
-                    <Text style={styles.selectButtonLabel}>
-                      {(() => {
-                        if (loadingCustomers) return "กำลังโหลดข้อมูลลูกค้า...";
-                        if (customer)
-                          return `${customer.code} - ${customer.name}`;
-                        return "กดเพื่อเลือกลูกค้า";
-                      })()}
-                    </Text>
-                    {customer && (
-                      <Text style={styles.selectButtonDescription}>
-                        📧 {customer.email} | 📞 {customer.tel}
-                      </Text>
-                    )}
-                  </View>
-                  <Text
+          <ScrollView
+            style={styles.controlsScroll}
+            contentContainerStyle={styles.controlsScrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* Customer Selection */}
+            {!isScannerTestMode && <View style={styles.section}>
+              <Text style={styles.sectionTitle}>1. เลือกลูกค้า</Text>
+              <View>
+                <View style={styles.customerHeaderRow}>
+                  <TouchableOpacity
                     style={[
-                      styles.selectButtonIcon,
-                      showCustomerDropdown && styles.selectButtonIconActive,
+                      styles.selectButton,
+                      showCustomerDropdown && styles.selectButtonActive,
+                      { flex: 1, marginRight: 8 },
                     ]}
+                    onPress={() => {
+                      setShowCustomerDropdown(!showCustomerDropdown);
+                    }}
+                    disabled={loadingCustomers}
                   >
-                    {showCustomerDropdown ? "▲" : "▼"}
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.reloadButton}
-                  onPress={loadCustomers}
-                  disabled={loadingCustomers}
-                >
-                  <Text style={styles.reloadButtonText}>🔄</Text>
-                </TouchableOpacity>
-              </View>
-
-              {showCustomerDropdown && (
-                <View style={styles.dropdown}>
-                  <View style={styles.searchContainer}>
-                    <Text style={styles.searchIcon}>🔍</Text>
-                    <TextInput
-                      value={customerSearch}
-                      onChangeText={setCustomerSearch}
-                      placeholder="ค้นหาด้วยรหัส, ชื่อ หรืออีเมล..."
-                      style={styles.searchInput}
-                      placeholderTextColor="#9CA3AF"
-                      autoFocus={true}
-                    />
-                    {customerSearch.length > 0 && (
-                      <TouchableOpacity
-                        onPress={() => setCustomerSearch("")}
-                        style={styles.searchClear}
-                      >
-                        <Text style={styles.searchClearText}>✕</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-
-                  <View style={styles.dropdownHeader}>
-                    <Text style={styles.dropdownHeaderText}>
-                      {customerSearch.length > 0
-                        ? `พบ ${filteredCustomers.length} รายการ`
-                        : `ทั้งหมด ${customers.length} รายการ`}
-                    </Text>
-                    {customerSearch.length > 0 &&
-                      filteredCustomers.length > 10 && (
-                        <Text style={styles.dropdownHeaderHint}>
-                          แสดง 10 รายการแรก
+                    <View style={styles.selectButtonContent}>
+                      <Text style={styles.selectButtonLabel}>
+                        {(() => {
+                          if (loadingCustomers) return "กำลังโหลดข้อมูลลูกค้า...";
+                          if (customer)
+                            return `${customer.code} - ${customer.name}`;
+                          return "กดเพื่อเลือกลูกค้า";
+                        })()}
+                      </Text>
+                      {customer && (
+                        <Text style={styles.selectButtonDescription}>
+                          📧 {customer.email} | 📞 {customer.tel}
                         </Text>
                       )}
-                  </View>
-
-                  <ScrollView style={styles.dropdownList} nestedScrollEnabled>
-                    {filteredCustomers.length === 0 ? (
-                      <View style={styles.emptySearch}>
-                        <Text style={styles.emptySearchIcon}>🔍</Text>
-                        <Text style={styles.emptySearchText}>
-                          ไม่พบข้อมูลลูกค้า
-                        </Text>
-                        <Text style={styles.emptySearchHint}>
-                          ลองค้นหาด้วยรหัสลูกค้า ชื่อ หรืออีเมล
-                        </Text>
-                      </View>
-                    ) : (
-                      filteredCustomers.slice(0, 10).map((item, index) => (
-                        <TouchableOpacity
-                          key={`customer-${item.uuid}-${index}`}
-                          style={[
-                            styles.dropdownItem,
-                            customer?.uuid === item.uuid &&
-                              styles.dropdownItemActive,
-                          ]}
-                          onPress={() => {
-                            setCustomer(item);
-                            setShowCustomerDropdown(false);
-                            setCustomerSearch("");
-                          }}
-                        >
-                          <View style={styles.dropdownItemContent}>
-                            <Text style={styles.dropdownItemTitle}>
-                              {item.code} - {item.name}
-                            </Text>
-                            <Text style={styles.dropdownItemDescription}>
-                              📧 {item.email} | 📞 {item.tel} | 📦{" "}
-                              {item.totalOrder} orders
-                            </Text>
-                          </View>
-                          {customer?.uuid === item.uuid && (
-                            <Text style={styles.dropdownItemCheck}>✓</Text>
-                          )}
-                        </TouchableOpacity>
-                      ))
-                    )}
-                  </ScrollView>
-                </View>
-              )}
-            </View>
-          </View>}
-
-          {/* Ready to Scan Notice */}
-          {canScan ? (
-            <View style={[styles.section, styles.readyNotice]}>
-              <Text style={styles.readyNoticeTitle}>✅ พร้อมสแกนบาร์โค้ด</Text>
-              <Text style={styles.readyNoticeText}>
-                คุณได้เลือกลูกค้าแล้ว สามารถเริ่มสแกนบาร์โค้ดได้
-              </Text>
-            </View>
-          ) : (
-            <View style={[styles.section, styles.hardwareNotice]}>
-              <Text style={styles.hardwareNoticeTitle}>
-                ⚠️ กรุณาเลือกลูกค้าก่อนสแกน
-              </Text>
-              <Text style={styles.hardwareNoticeText}>
-                กรุณาเลือกลูกค้าก่อนที่จะสามารถสแกนบาร์โค้ดได้
-              </Text>
-            </View>
-          )}
-
-          {/* Manual Input & Settings */}
-          <View style={styles.section}>
-            <View style={styles.inputSection}>
-              <View style={styles.inputHeader}>
-                <Text style={styles.sectionTitle}>Tracking Number</Text>
-                <View style={styles.autoToggle}>
-                  <Text style={styles.toggleLabel}>Auto</Text>
-                  <Switch
-                    value={autoEnter}
-                    onValueChange={setAutoEnter}
-                    trackColor={{
-                      false: "#E5E7EB",
-                      true: "rgba(252, 211, 77, 1.00)",
-                    }}
-                    thumbColor={autoEnter ? "#FFFFFF" : "#9CA3AF"}
-                  />
-                </View>
-              </View>
-              <View style={styles.inputRow}>
-                <TextInput
-                  ref={inputRef}
-                  value={input}
-                  onChangeText={handleInputChange}
-                  placeholder={
-                    canScan
-                      ? "กรอกหรือสแกน Tracking No."
-                      : "เลือกลูกค้าก่อนสแกน"
-                  }
-                  style={[
-                    styles.trackingInput,
-                    !canScan && styles.trackingInputDisabled,
-                  ]}
-                  keyboardType="default"
-                  returnKeyType="done"
-                  placeholderTextColor="#9CA3AF"
-                  autoCorrect={false}
-                  editable={canScan && !scannedLock && scanError === null}
-                  submitBehavior="submit"
-                  onSubmitEditing={autoEnter ? handleManualSubmit : undefined}
-                />
-                {!autoEnter && (
-                  <TouchableOpacity
-                    onPress={handleManualSubmit}
-                    style={[
-                      styles.submitButton,
-                      (!input.trim() || !canScan) &&
-                        styles.submitButtonDisabled,
-                    ]}
-                    disabled={!input.trim() || !canScan}
-                  >
-                    <Text style={styles.submitButtonText}>✓</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          </View>
-
-          {/* Status & History */}
-          <View style={[styles.section, styles.historySection]}>
-            <View style={styles.statusHeader}>
-              <Text style={styles.sectionTitle}>ประวัติการสแกน</Text>
-              <Text style={styles.historyCount}>{history.length} รายการ</Text>
-            </View>
-
-            {lastStatus !== "-" && (
-              <View style={styles.historyCard}>
-                <Text style={styles.statusLabel}>สแกนล่าสุด:</Text>
-                <Text style={styles.statusText}>{lastStatus}</Text>
-              </View>
-            )}
-
-            {history.length === 0 ? (
-              <View style={styles.emptyHistory}>
-                <Text style={styles.emptyHistoryIcon}>📋</Text>
-                <Text style={styles.emptyHistoryText}>
-                  ยังไม่มีประวัติการสแกน
-                </Text>
-                <Text style={styles.emptyHistorySubtext}>
-                  เริ่มสแกนบาร์โค้ดเพื่อดูประวัติที่นี่
-                </Text>
-              </View>
-            ) : (
-              <ScrollView
-                style={styles.historyScroll}
-                nestedScrollEnabled
-                showsVerticalScrollIndicator
-              >
-                {history.map((item, index) => {
-                  const scanTime = new Date(item.scannedAt);
-                  const isLatest = index === 0;
-
-                  return (
-                    <View
-                      key={item.id}
+                    </View>
+                    <Text
                       style={[
-                        styles.historyItem,
-                        isLatest && styles.historyItemLatest,
+                        styles.selectButtonIcon,
+                        showCustomerDropdown && styles.selectButtonIconActive,
                       ]}
                     >
-                      <View style={styles.historyLeft}>
-                        <View
-                          style={[
-                            styles.historyIcon,
-                            isLatest && styles.historyIconLatest,
-                          ]}
+                      {showCustomerDropdown ? "▲" : "▼"}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.reloadButton}
+                    onPress={loadCustomers}
+                    disabled={loadingCustomers}
+                  >
+                    <Text style={styles.reloadButtonText}>🔄</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {showCustomerDropdown && (
+                  <View style={styles.dropdown}>
+                    <View style={styles.searchContainer}>
+                      <Text style={styles.searchIcon}>🔍</Text>
+                      <TextInput
+                        value={customerSearch}
+                        onChangeText={setCustomerSearch}
+                        placeholder="ค้นหาด้วยรหัส, ชื่อ หรืออีเมล..."
+                        style={styles.searchInput}
+                        placeholderTextColor="#9CA3AF"
+                        autoFocus={true}
+                      />
+                      {customerSearch.length > 0 && (
+                        <TouchableOpacity
+                          onPress={() => setCustomerSearch("")}
+                          style={styles.searchClear}
                         >
-                          <Text style={styles.historyIconText}>
-                            {isLatest ? "🆕" : "📦"}
+                          <Text style={styles.searchClearText}>✕</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+
+                    <View style={styles.dropdownHeader}>
+                      <Text style={styles.dropdownHeaderText}>
+                        {customerSearch.length > 0
+                          ? `พบ ${filteredCustomers.length} รายการ`
+                          : `ทั้งหมด ${customers.length} รายการ`}
+                      </Text>
+                      {customerSearch.length > 0 &&
+                        filteredCustomers.length > 10 && (
+                          <Text style={styles.dropdownHeaderHint}>
+                            แสดง 10 รายการแรก
+                          </Text>
+                        )}
+                    </View>
+
+                    <ScrollView style={styles.dropdownList} nestedScrollEnabled>
+                      {filteredCustomers.length === 0 ? (
+                        <View style={styles.emptySearch}>
+                          <Text style={styles.emptySearchIcon}>🔍</Text>
+                          <Text style={styles.emptySearchText}>
+                            ไม่พบข้อมูลลูกค้า
+                          </Text>
+                          <Text style={styles.emptySearchHint}>
+                            ลองค้นหาด้วยรหัสลูกค้า ชื่อ หรืออีเมล
                           </Text>
                         </View>
-                        <View style={styles.historyNumber}>
-                          <Text style={styles.historyNumberText}>
-                            #{history.length - index}
-                          </Text>
-                        </View>
-                      </View>
-                      <View style={styles.historyContent}>
-                        <View style={styles.historyHeader}>
-                          <Text style={styles.historyCode}>{item.code}</Text>
+                      ) : (
+                        filteredCustomers.slice(0, 10).map((item, index) => (
+                          <TouchableOpacity
+                            key={`customer-${item.uuid}-${index}`}
+                            style={[
+                              styles.dropdownItem,
+                              customer?.uuid === item.uuid &&
+                                styles.dropdownItemActive,
+                            ]}
+                            onPress={() => {
+                              setCustomer(item);
+                              setShowCustomerDropdown(false);
+                              setCustomerSearch("");
+                              setHeroBanner({
+                                statusType: "idle",
+                                title: `เลือกลูกค้า: ${item.code}`,
+                                subtitle: `${item.name} • พร้อมยิงปล่อยออก`,
+                                badgeLabel: item.code,
+                                badgeType: "default",
+                              });
+                            }}
+                          >
+                            <View style={styles.dropdownItemContent}>
+                              <Text style={styles.dropdownItemTitle}>
+                                {item.code} - {item.name}
+                              </Text>
+                              <Text style={styles.dropdownItemDescription}>
+                                📧 {item.email} | 📞 {item.tel} | 📦{" "}
+                                {item.totalOrder} orders
+                              </Text>
+                            </View>
+                            {customer?.uuid === item.uuid && (
+                              <Text style={styles.dropdownItemCheck}>✓</Text>
+                            )}
+                          </TouchableOpacity>
+                        ))
+                      )}
+                    </ScrollView>
+                  </View>
+                )}
+              </View>
+            </View>}
+
+            {/* QoL Hero Banner - Large Glanceable Scan Feedback */}
+            {heroBanner && (
+              <GlanceableHeroBanner
+                statusType={heroBanner.statusType}
+                title={heroBanner.title}
+                trackingCode={heroBanner.trackingCode}
+                subtitle={heroBanner.subtitle}
+                badgeLabel={heroBanner.badgeLabel}
+                badgeType={heroBanner.badgeType}
+                actionText={heroBanner.actionText}
+                onActionPress={heroBanner.onActionPress}
+              />
+            )}
+
+            {/* Ready to Scan Notice */}
+            {!heroBanner && (
+              canScan ? (
+                <View style={[styles.section, styles.readyNotice]}>
+                  <Text style={styles.readyNoticeTitle}>✅ พร้อมสแกนบาร์โค้ด</Text>
+                  <Text style={styles.readyNoticeText}>
+                    ลูกค้า: {customer?.name} ({customer?.code})
+                  </Text>
+                </View>
+              ) : (
+                <View style={[styles.section, styles.hardwareNotice]}>
+                  <Text style={styles.hardwareNoticeTitle}>
+                    ⚠️ กรุณาเลือกลูกค้าก่อนสแกน
+                  </Text>
+                  <Text style={styles.hardwareNoticeText}>
+                    กรุณาเลือกลูกค้าก่อนที่จะสามารถสแกนบาร์โค้ดได้
+                  </Text>
+                </View>
+              )
+            )}
+
+            {/* Manual Input & Settings with Focus Shield & Soft Keyboard Suppression */}
+            <View style={styles.section}>
+              <View style={styles.inputSection}>
+                <View style={styles.inputHeader}>
+                  <Text style={styles.sectionTitle}>Tracking Number</Text>
+                  <View style={styles.autoToggle}>
+                    <Text style={styles.toggleLabel}>Auto</Text>
+                    <Switch
+                      value={autoEnter}
+                      onValueChange={setAutoEnter}
+                      trackColor={{
+                        false: "#E5E7EB",
+                        true: "rgba(252, 211, 77, 1.00)",
+                      }}
+                      thumbColor={autoEnter ? "#FFFFFF" : "#9CA3AF"}
+                    />
+                  </View>
+                </View>
+                <View style={styles.inputRow}>
+                  <TextInput
+                    ref={inputRef}
+                    value={input}
+                    onChangeText={handleInputChange}
+                    placeholder={
+                      canScan
+                        ? "กรอกหรือสแกน Tracking No."
+                        : "เลือกลูกค้าก่อนสแกน"
+                    }
+                    style={[
+                      styles.trackingInput,
+                      isInputFocused && styles.trackingInputFocused,
+                      !canScan && styles.trackingInputDisabled,
+                    ]}
+                    keyboardType="default"
+                    returnKeyType="done"
+                    placeholderTextColor="#9CA3AF"
+                    autoCorrect={false}
+                    showSoftInputOnFocus={showSoftKeyboard}
+                    onFocus={() => setIsInputFocused(true)}
+                    onBlur={() => setIsInputFocused(false)}
+                    editable={canScan && !scannedLock && scanError === null}
+                    submitBehavior="submit"
+                    onSubmitEditing={autoEnter ? handleManualSubmit : undefined}
+                  />
+
+                  {/* QoL Keyboard Toggle Button */}
+                  <TouchableOpacity
+                    style={[
+                      styles.keyboardToggleBtn,
+                      showSoftKeyboard && styles.keyboardToggleBtnActive,
+                    ]}
+                    onPress={() => {
+                      const nextState = !showSoftKeyboard;
+                      setShowSoftKeyboard(nextState);
+                      setTimeout(() => inputRef.current?.focus(), 100);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.keyboardToggleIcon}>
+                      {showSoftKeyboard ? "⌨️ ON" : "⌨️"}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {!autoEnter && (
+                    <TouchableOpacity
+                      onPress={handleManualSubmit}
+                      style={[
+                        styles.submitButton,
+                        (!input.trim() || !canScan) &&
+                          styles.submitButtonDisabled,
+                      ]}
+                      disabled={!input.trim() || !canScan}
+                    >
+                      <Text style={styles.submitButtonText}>✓</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            </View>
+
+            {/* Status & History with Monospace Digits Highlight */}
+            <View style={[styles.section, styles.historySection]}>
+              <View style={styles.statusHeader}>
+                <Text style={styles.sectionTitle}>ประวัติการสแกน</Text>
+                <Text style={styles.historyCount}>{history.length} รายการ</Text>
+              </View>
+
+              {lastStatus !== "-" && (
+                <View style={styles.historyCard}>
+                  <Text style={styles.statusLabel}>สแกนล่าสุด:</Text>
+                  <Text style={styles.statusText}>{lastStatus}</Text>
+                </View>
+              )}
+
+              {history.length === 0 ? (
+                <View style={styles.emptyHistory}>
+                  <Text style={styles.emptyHistoryIcon}>📋</Text>
+                  <Text style={styles.emptyHistoryText}>
+                    ยังไม่มีประวัติการสแกน
+                  </Text>
+                  <Text style={styles.emptyHistorySubtext}>
+                    เริ่มสแกนบาร์โค้ดเพื่อดูประวัติที่นี่
+                  </Text>
+                </View>
+              ) : (
+                <ScrollView
+                  style={styles.historyScroll}
+                  nestedScrollEnabled
+                  showsVerticalScrollIndicator
+                >
+                  {history.map((item, index) => {
+                    const scanTime = new Date(item.scannedAt);
+                    const isLatest = index === 0;
+
+                    return (
+                      <View
+                        key={item.id}
+                        style={[
+                          styles.historyItem,
+                          isLatest && styles.historyItemLatest,
+                        ]}
+                      >
+                        <View style={styles.historyLeft}>
                           <View
                             style={[
-                              styles.historyBadge,
-                              item.mode === "auto"
-                                ? styles.historyBadgeAuto
-                                : styles.historyBadgeManual,
+                              styles.historyIcon,
+                              isLatest && styles.historyIconLatest,
                             ]}
                           >
-                            <Text style={styles.historyBadgeText}>
-                              {item.mode === "auto" ? "AUTO" : "MANUAL"}
+                            <Text style={styles.historyIconText}>
+                              {isLatest ? "🆕" : "📦"}
+                            </Text>
+                          </View>
+                          <View style={styles.historyNumber}>
+                            <Text style={styles.historyNumberText}>
+                              #{history.length - index}
                             </Text>
                           </View>
                         </View>
-                        <View style={styles.historyDetails}>
-                          <Text style={styles.historyCustomer}>
-                            👤 {item.customerCode}
-                          </Text>
-                          <Text style={styles.historyTime}>
-                            🕐 {scanTime.toLocaleString("th-TH")}
-                          </Text>
+                        <View style={styles.historyContent}>
+                          <View style={styles.historyHeader}>
+                            <TrackingCodeText
+                              code={item.code}
+                              style={styles.historyCode}
+                              highlightStyle={styles.historyCodeHighlight}
+                            />
+                            <View
+                              style={[
+                                styles.historyBadge,
+                                item.mode === "auto"
+                                  ? styles.historyBadgeAuto
+                                  : styles.historyBadgeManual,
+                              ]}
+                            >
+                              <Text style={styles.historyBadgeText}>
+                                {item.mode === "auto" ? "AUTO" : "MANUAL"}
+                              </Text>
+                            </View>
+                          </View>
+                          <View style={styles.historyDetails}>
+                            <Text style={styles.historyCustomer}>
+                              👤 {item.customerCode}
+                            </Text>
+                            <Text style={styles.historyTime}>
+                              🕐 {scanTime.toLocaleString("th-TH")}
+                            </Text>
+                          </View>
                         </View>
                       </View>
-                    </View>
-                  );
-                })}
-              </ScrollView>
-            )}
-          </View>
-        </ScrollView>
+                    );
+                  })}
+                </ScrollView>
+              )}
+            </View>
+          </ScrollView>
+        </View>
       </View>
-    </View>
+    </TouchableWithoutFeedback>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#451A03",
+    backgroundColor: "#111827",
   },
   dummyButton: {
     position: "absolute",
@@ -937,11 +1037,11 @@ const styles = StyleSheet.create({
     height: 1,
   },
   compactHeader: {
-    backgroundColor: "#78350F",
+    backgroundColor: "#1F2937",
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#B45309",
+    borderBottomColor: "#374151",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -995,13 +1095,17 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
   },
   section: {
-    marginBottom: 24,
+    marginBottom: 20,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: "600",
     color: "#1F2937",
-    marginBottom: 12,
+    marginBottom: 10,
+  },
+  customerHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
   },
   selectButton: {
     backgroundColor: "#FFFFFF",
@@ -1031,22 +1135,16 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   selectButtonIcon: {
-    fontSize: 18,
-    color: "#3B82F6",
+    fontSize: 16,
+    color: "#6B7280",
     marginLeft: 8,
-  },
-  customerHeaderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
   },
   reloadButton: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
     borderColor: "#E5E7EB",
     borderRadius: 8,
-    width: 56,
-    height: 56,
+    padding: 16,
     justifyContent: "center",
     alignItems: "center",
   },
@@ -1170,16 +1268,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#10B981",
     borderRadius: 8,
-    padding: 16,
+    padding: 14,
+    marginBottom: 16,
   },
   readyNoticeTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "600",
     color: "#065F46",
-    marginBottom: 4,
+    marginBottom: 2,
   },
   readyNoticeText: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#047857",
   },
   hardwareNotice: {
@@ -1187,16 +1286,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#F59E0B",
     borderRadius: 8,
-    padding: 16,
+    padding: 14,
+    marginBottom: 16,
   },
   hardwareNoticeTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "600",
     color: "#92400E",
-    marginBottom: 4,
+    marginBottom: 2,
   },
   hardwareNoticeText: {
-    fontSize: 14,
+    fontSize: 13,
     color: "#B45309",
   },
   inputSection: {
@@ -1210,7 +1310,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 12,
+    marginBottom: 10,
   },
   autoToggle: {
     flexDirection: "row",
@@ -1228,23 +1328,53 @@ const styles = StyleSheet.create({
   trackingInput: {
     flex: 1,
     backgroundColor: "#F9FAFB",
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: "#D1D5DB",
+    borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 16,
     color: "#1F2937",
   },
+  trackingInputFocused: {
+    borderColor: "rgba(252, 211, 77, 1.00)",
+    borderWidth: 2,
+    backgroundColor: "#FFFFFF",
+    shadowColor: "rgba(252, 211, 77, 1.00)",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 2,
+  },
   trackingInputDisabled: {
     backgroundColor: "#F3F4F6",
     color: "#9CA3AF",
   },
+  keyboardToggleBtn: {
+    backgroundColor: "#F3F4F6",
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 11,
+    marginLeft: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  keyboardToggleBtnActive: {
+    backgroundColor: "#FFFBEB",
+    borderColor: "rgba(252, 211, 77, 1.00)",
+  },
+  keyboardToggleIcon: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#374151",
+  },
   submitButton: {
     backgroundColor: "rgba(252, 211, 77, 1.00)",
-    borderRadius: 6,
+    borderRadius: 8,
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 11,
     marginLeft: 8,
   },
   submitButtonDisabled: {
@@ -1273,7 +1403,7 @@ const styles = StyleSheet.create({
     color: "#6B7280",
   },
   historyCard: {
-    backgroundColor: "#FFFBEB",
+    backgroundColor: "#ECFDF5",
     borderRadius: 6,
     padding: 12,
     marginBottom: 16,
@@ -1317,7 +1447,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#F3F4F6",
   },
   historyItemLatest: {
-    backgroundColor: "#FFFBEB",
+    backgroundColor: "#ECFDF5",
   },
   historyLeft: {
     alignItems: "center",
@@ -1362,6 +1492,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: "#1F2937",
+  },
+  historyCodeHighlight: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#D97706",
   },
   historyBadge: {
     paddingHorizontal: 8,
