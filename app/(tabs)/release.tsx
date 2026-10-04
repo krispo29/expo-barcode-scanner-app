@@ -52,6 +52,15 @@ import {
   triggerWarningHaptic,
 } from "../../utils/haptics";
 import { ProductivityMetricsBar } from "../components/ProductivityMetricsBar";
+import { NetworkStatusBadge } from "../components/NetworkStatusBadge";
+import { useNetworkStatus } from "../../hooks/useNetworkStatus";
+import { useHardwareScanner } from "../../hooks/useHardwareScanner";
+import {
+  appendScanRecord,
+  clearScanHistory,
+  getReleaseHistoryKey,
+  loadScanHistory,
+} from "../../utils/scanHistory";
 import {
   calculateScanVelocity,
   getInitialShiftMetrics,
@@ -128,9 +137,7 @@ export default function ReleaseScreen() {
   const [customerSearch, setCustomerSearch] = useState("");
   const [recentCustomerUuids, setRecentCustomerUuids] = useState<string[]>([]);
 
-  // QoL States (Keyboard suppression & Hero Banner)
-  const [showSoftKeyboard, setShowSoftKeyboard] = useState(false);
-  const [isInputFocused, setIsInputFocused] = useState(false);
+  const { isOnline } = useNetworkStatus();
   const [heroBanner, setHeroBanner] = useState<GlanceableHeroBannerProps | null>(null);
 
   // Offline Buffer states
@@ -144,12 +151,54 @@ export default function ReleaseScreen() {
   // Check if ready to scan
   const canScan = customer !== null;
 
-  const [autoEnter, setAutoEnter] = useState(true);
-  const [input, setInput] = useState("");
-  const [scannedLock, setScannedLock] = useState(false);
   const [history, setHistory] = useState<ScanRecord[]>([]);
   const [lastStatus, setLastStatus] = useState<string>("-");
   const [scanError, setScanError] = useState<ScanErrorKind | null>(null);
+
+  // Reference for handleDetected so useHardwareScanner can call it before declaration
+  const handleDetectedRef = useRef<
+    (raw: string, mode: "auto" | "manual") => Promise<void>
+  >(() => Promise.resolve());
+
+  const {
+    input,
+    setInput,
+    inputRef,
+    latestInputRef,
+    scanInFlightRef,
+    autoEnter,
+    setAutoEnter,
+    showSoftKeyboard,
+    toggleSoftKeyboard,
+    isInputFocused,
+    setIsInputFocused,
+    scannedLock,
+    setScannedLock,
+    clearAutoSubmitTimer,
+    focusTrackingInput,
+    resetInput,
+    handleInputChange,
+    handleManualSubmit,
+  } = useHardwareScanner({
+    canScan,
+    isLocked: scanError !== null,
+    onScan: (rawValue, mode) => handleDetectedRef.current(rawValue, mode),
+  });
+
+  // Persistent History: restore per-customer scan history when customer changes
+  useEffect(() => {
+    if (!customer) {
+      setHistory([]);
+      return;
+    }
+    const key = getReleaseHistoryKey(customer.uuid);
+    void loadScanHistory<ScanRecord>(key).then((loaded) => {
+      setHistory(loaded);
+      for (const item of loaded) {
+        scannedCodesRef.current.add(item.code);
+      }
+    });
+  }, [customer]);
 
   // Productivity Metrics & Sound States
   const [shiftMetrics, setShiftMetrics] = useState<ShiftMetrics>(
@@ -208,41 +257,9 @@ export default function ReleaseScreen() {
     triggerSuccessHaptic();
   }, []);
 
-  const autoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
   const lastScanRef = useRef({ value: "", timestamp: 0 });
   const scannedCodesRef = useRef(new Set<string>());
-  const latestInputRef = useRef("");
-  const scanInFlightRef = useRef(false);
-
-  const inputRef = useRef<TextInput | null>(null);
-
-  const clearAutoSubmitTimer = useCallback(() => {
-    if (autoSubmitTimerRef.current) {
-      clearTimeout(autoSubmitTimerRef.current);
-      autoSubmitTimerRef.current = null;
-    }
-  }, []);
-
-  const focusTrackingInput = useCallback(() => {
-    setTimeout(() => {
-      inputRef.current?.focus();
-    }, 150);
-  }, []);
-
-  // โฟกัสช่อง Tracking Number อัตโนมัติเมื่อเข้า screen
-  useEffect(() => {
-    if (inputRef.current) {
-      focusTrackingInput();
-    }
-  }, [focusTrackingInput]);
-
-  // เคลียร์ timer ตอน unmount
-  useEffect(() => {
-    return () => {
-      if (autoSubmitTimerRef.current) clearTimeout(autoSubmitTimerRef.current);
-    };
-  }, []);
 
   useEffect(() => {
     if (!isScannerTestMode) void ensureAuthenticated();
@@ -282,13 +299,36 @@ export default function ReleaseScreen() {
     }
   }, [customer, focusTrackingInput, showCustomerModal]);
 
-  const showScanError = useCallback((kind: ScanErrorKind) => {
-    clearAutoSubmitTimer();
-    latestInputRef.current = "";
-    setInput("");
-    inputRef.current?.blur();
-    setScanError(kind);
-  }, [clearAutoSubmitTimer]);
+  const showScanError = useCallback(
+    (kind: ScanErrorKind) => {
+      resetInput();
+      inputRef.current?.blur();
+      setScanError(kind);
+    },
+    [resetInput],
+  );
+
+  const handleClearBatchHistory = useCallback(() => {
+    if (!customer) return;
+    Alert.alert(
+      "เริ่มรอบใหม่",
+      `ต้องการล้างประวัติการสแกนของลูกค้า ${customer.code} ใช่หรือไม่? (ข้อมูลในระบบจะไม่ได้รับผลกระทบ)`,
+      [
+        { text: "ยกเลิก", style: "cancel" },
+        {
+          text: "ล้างประวัติ",
+          style: "destructive",
+          onPress: async () => {
+            const key = getReleaseHistoryKey(customer.uuid);
+            await clearScanHistory(key);
+            setHistory([]);
+            scannedCodesRef.current.clear();
+            triggerSuccessHaptic();
+          },
+        },
+      ],
+    );
+  }, [customer]);
 
   const confirmScanError = useCallback(() => {
     setScanError(null);
@@ -494,12 +534,9 @@ export default function ReleaseScreen() {
             scannedAt: new Date().toISOString(),
             mode: item.mode,
           };
-          setHistory((prev) =>
-            [record, ...prev.filter((r) => r.code !== item.trackingNo)].slice(
-              0,
-              30,
-            ),
-          );
+          const histKey = getReleaseHistoryKey(item.customerUuid);
+          const updated = await appendScanRecord(histKey, record);
+          setHistory(updated);
           continue;
         }
 
@@ -531,12 +568,9 @@ export default function ReleaseScreen() {
             scannedAt: new Date().toISOString(),
             mode: item.mode,
           };
-          setHistory((prev) =>
-            [record, ...prev.filter((r) => r.code !== item.trackingNo)].slice(
-              0,
-              30,
-            ),
-          );
+          const histKey = getReleaseHistoryKey(item.customerUuid);
+          const updated = await appendScanRecord(histKey, record);
+          setHistory(updated);
         } else {
           const msg = response.data?.message || "";
           if (
@@ -725,8 +759,8 @@ export default function ReleaseScreen() {
             mode,
           };
           scannedCodesRef.current.add(normalized);
-          latestInputRef.current = "";
-          setHistory((prev) => [record, ...prev].slice(0, 30));
+          const testKey = getReleaseHistoryKey(customer.uuid);
+          void appendScanRecord(testKey, record).then(setHistory);
           setLastStatus(`${normalized} • ${customer.name}`);
           setHeroBanner({
             statusType: "success",
@@ -737,7 +771,7 @@ export default function ReleaseScreen() {
             subtitle: `${customer.name} • ${new Date().toLocaleTimeString("th-TH")}`,
           });
           triggerSuccessHaptic();
-          setInput("");
+          resetInput();
           void industrialAudio.playSound("success");
           void recordScanMetric(
             METRICS_STORAGE_KEYS.RELEASE_METRICS,
@@ -782,8 +816,8 @@ export default function ReleaseScreen() {
           };
 
           scannedCodesRef.current.add(normalized);
-          latestInputRef.current = "";
-          setHistory((prev) => [record, ...prev].slice(0, 30));
+          const liveKey = getReleaseHistoryKey(customer.uuid);
+          void appendScanRecord(liveKey, record).then(setHistory);
           setLastStatus(`${normalized} • ${customer.name}`);
           setHeroBanner({
             statusType: "success",
@@ -794,7 +828,7 @@ export default function ReleaseScreen() {
             subtitle: `${customer.name} • ${new Date().toLocaleTimeString("th-TH")}`,
           });
           triggerSuccessHaptic();
-          setInput("");
+          resetInput();
           void industrialAudio.playSound("success");
           void recordScanMetric(
             METRICS_STORAGE_KEYS.RELEASE_METRICS,
@@ -875,7 +909,6 @@ export default function ReleaseScreen() {
     },
     [
       canScan,
-      clearAutoSubmitTimer,
       customer,
       ensureAuthenticated,
       focusTrackingInput,
@@ -883,43 +916,12 @@ export default function ReleaseScreen() {
       history,
       offlineQueue,
       playErrorSound,
+      resetInput,
       showScanError,
     ],
   );
 
-  // ใช้กับสแกนเนอร์ฮาร์ดแวร์ (RS51 ยิงแล้วส่งตัวอักษร + Enter เข้ามา)
-  const handleInputChange = useCallback(
-    (text: string) => {
-      if (scanInFlightRef.current || scanError !== null) return;
-
-      const sanitized = text.replaceAll(/[\r\n]/g, "");
-      const hasSubmitChar = /[\r\n]/.test(text);
-      latestInputRef.current = sanitized;
-      setInput(sanitized);
-      clearAutoSubmitTimer();
-
-      if (!autoEnter || !sanitized.trim()) return;
-      if (hasSubmitChar) {
-        void handleDetected(sanitized, "auto");
-        return;
-      }
-
-      autoSubmitTimerRef.current = setTimeout(() => {
-        const latestValue = latestInputRef.current.trim();
-        if (latestValue === sanitized.trim()) {
-          void handleDetected(latestValue, "auto");
-        }
-      }, SCANNER_AUTO_SUBMIT_DELAY_MS);
-    },
-    [autoEnter, clearAutoSubmitTimer, handleDetected, scanError],
-  );
-
-  const handleManualSubmit = () => {
-    const trackingNumber = latestInputRef.current;
-    if (!trackingNumber.trim() || !canScan) return;
-    clearAutoSubmitTimer();
-    void handleDetected(trackingNumber, autoEnter ? "auto" : "manual");
-  };
+  handleDetectedRef.current = handleDetected;
 
   const filteredCustomers = useMemo(() => {
     if (!customerSearch.trim()) return customers;
@@ -1021,11 +1023,15 @@ export default function ReleaseScreen() {
           <View style={styles.dummyButtonContent} />
         </TouchableOpacity>
 
-        {/* Compact Header - App Title + Logout */}
+        {/* Compact Header - App Title + Network Status + Logout */}
         <View style={styles.compactHeader}>
           <View style={styles.compactHeaderContent}>
             <Text style={styles.compactHeaderTitle}>📤 SHIP2CU Release</Text>
           </View>
+          <NetworkStatusBadge
+            isOnline={isOnline}
+            isTestMode={isScannerTestMode}
+          />
           <TouchableOpacity
             style={styles.headerLogoutButton}
             onPress={handleLogout}
@@ -1211,11 +1217,7 @@ export default function ReleaseScreen() {
                       styles.keyboardToggleBtn,
                       showSoftKeyboard && styles.keyboardToggleBtnActive,
                     ]}
-                    onPress={() => {
-                      const nextState = !showSoftKeyboard;
-                      setShowSoftKeyboard(nextState);
-                      setTimeout(() => inputRef.current?.focus(), 100);
-                    }}
+                    onPress={toggleSoftKeyboard}
                     activeOpacity={0.7}
                   >
                     <Text style={styles.keyboardToggleIcon}>
@@ -1243,8 +1245,21 @@ export default function ReleaseScreen() {
             {/* Status & History with Monospace Digits Highlight */}
             <View style={[styles.section, styles.historySection]}>
               <View style={styles.statusHeader}>
-                <Text style={styles.sectionTitle}>ประวัติการสแกน</Text>
-                <Text style={styles.historyCount}>{history.length} รายการ</Text>
+                <Text style={styles.sectionTitle}>
+                  ประวัติการสแกน {customer ? `(${customer.code})` : ""}
+                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Text style={styles.historyCount}>{history.length} รายการ</Text>
+                  {history.length > 0 && (
+                    <TouchableOpacity
+                      onPress={handleClearBatchHistory}
+                      style={styles.clearBatchBtn}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.clearBatchBtnText}>ล้างรอบ</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
 
               {lastStatus !== "-" && (
@@ -1845,5 +1860,18 @@ const styles = StyleSheet.create({
   historyTime: {
     fontSize: 14,
     color: "#6B7280",
+  },
+  clearBatchBtn: {
+    backgroundColor: "#FEE2E2",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: "#FCA5A5",
+  },
+  clearBatchBtnText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#DC2626",
   },
 });

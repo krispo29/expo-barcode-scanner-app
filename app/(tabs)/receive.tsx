@@ -64,6 +64,15 @@ import {
   triggerWarningHaptic,
 } from "../../utils/haptics";
 import { ProductivityMetricsBar } from "../components/ProductivityMetricsBar";
+import { NetworkStatusBadge } from "../components/NetworkStatusBadge";
+import { useNetworkStatus } from "../../hooks/useNetworkStatus";
+import { useHardwareScanner } from "../../hooks/useHardwareScanner";
+import {
+  appendScanRecord,
+  clearScanHistory,
+  getReceiveHistoryKey,
+  loadScanHistory,
+} from "../../utils/scanHistory";
 import {
   calculateScanVelocity,
   getInitialShiftMetrics,
@@ -130,9 +139,7 @@ export default function ReceiveScreen() {
   } | null>(null);
   const [changeLotLoading, setChangeLotLoading] = useState(false);
 
-  // QoL States (Keyboard suppression & Hero Banner)
-  const [showSoftKeyboard, setShowSoftKeyboard] = useState(false);
-  const [isInputFocused, setIsInputFocused] = useState(false);
+  const { isOnline } = useNetworkStatus();
   const [heroBanner, setHeroBanner] = useState<GlanceableHeroBannerProps | null>(null);
 
   // Offline Buffer states
@@ -146,12 +153,54 @@ export default function ReceiveScreen() {
   // Check if ready to scan
   const canScan = selectedLot !== null;
 
-  const [autoEnter, setAutoEnter] = useState(true);
-  const [input, setInput] = useState("");
-  const [scannedLock, setScannedLock] = useState(false);
   const [history, setHistory] = useState<ScanRecord[]>([]);
   const [lastStatus, setLastStatus] = useState<string>("-");
   const [scanError, setScanError] = useState<ScanErrorKind | null>(null);
+
+  // Reference for handleDetected so useHardwareScanner can call it before declaration
+  const handleDetectedRef = useRef<
+    (raw: string, mode: "auto" | "manual") => Promise<void>
+  >(() => Promise.resolve());
+
+  const {
+    input,
+    setInput,
+    inputRef,
+    latestInputRef,
+    scanInFlightRef,
+    autoEnter,
+    setAutoEnter,
+    showSoftKeyboard,
+    toggleSoftKeyboard,
+    isInputFocused,
+    setIsInputFocused,
+    scannedLock,
+    setScannedLock,
+    clearAutoSubmitTimer,
+    focusTrackingInput,
+    resetInput,
+    handleInputChange,
+    handleManualSubmit,
+  } = useHardwareScanner({
+    canScan,
+    isLocked: scanError !== null || lotMismatchData !== null,
+    onScan: (rawValue, mode) => handleDetectedRef.current(rawValue, mode),
+  });
+
+  // Persistent History: restore per-lot scan history when selectedLot changes
+  useEffect(() => {
+    if (!selectedLot) {
+      setHistory([]);
+      return;
+    }
+    const key = getReceiveHistoryKey(selectedLot.mawbUUID);
+    void loadScanHistory<ScanRecord>(key).then((loaded) => {
+      setHistory(loaded);
+      for (const item of loaded) {
+        scannedCodesRef.current.add(item.code);
+      }
+    });
+  }, [selectedLot]);
 
   // Productivity Metrics & Sound States
   const [shiftMetrics, setShiftMetrics] = useState<ShiftMetrics>(
@@ -210,25 +259,9 @@ export default function ReceiveScreen() {
     triggerSuccessHaptic();
   }, []);
 
-  const autoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idCounter = useRef(0);
   const lastScanRef = useRef({ value: "", timestamp: 0 });
   const scannedCodesRef = useRef(new Set<string>());
-  const latestInputRef = useRef("");
-  const scanInFlightRef = useRef(false);
-
-  const inputRef = useRef<TextInput | null>(null);
-
-  const clearAutoSubmitTimer = useCallback(() => {
-    if (autoSubmitTimerRef.current) {
-      clearTimeout(autoSubmitTimerRef.current);
-      autoSubmitTimerRef.current = null;
-    }
-  }, []);
-
-  const focusTrackingInput = useCallback(() => {
-    setTimeout(() => inputRef.current?.focus(), 150);
-  }, []);
 
   // โฟกัสช่อง Tracking Number อัตโนมัติเมื่อเลือก Lot แล้ว และ modal ปิด
   useEffect(() => {
@@ -237,12 +270,6 @@ export default function ReceiveScreen() {
     }
   }, [focusTrackingInput, selectedLot, showLotModal]);
 
-  // เคลียร์ timer ตอน unmount
-  useEffect(() => {
-    return () => {
-      if (autoSubmitTimerRef.current) clearTimeout(autoSubmitTimerRef.current);
-    };
-  }, []);
 
   useEffect(() => {
     if (!isScannerTestMode) void ensureAuthenticated();
@@ -422,6 +449,28 @@ export default function ReceiveScreen() {
     [focusTrackingInput, lastFailedScan, selectedLot],
   );
 
+  const handleClearBatchHistory = useCallback(() => {
+    if (!selectedLot) return;
+    Alert.alert(
+      "เริ่มรอบใหม่",
+      `ต้องการล้างประวัติการสแกนของ Lot ${selectedLot.refLotNo} ใช่หรือไม่? (ข้อมูลในระบบจะไม่ได้รับผลกระทบ)`,
+      [
+        { text: "ยกเลิก", style: "cancel" },
+        {
+          text: "ล้างประวัติ",
+          style: "destructive",
+          onPress: async () => {
+            const key = getReceiveHistoryKey(selectedLot.mawbUUID);
+            await clearScanHistory(key);
+            setHistory([]);
+            scannedCodesRef.current.clear();
+            triggerSuccessHaptic();
+          },
+        },
+      ],
+    );
+  }, [selectedLot]);
+
   const handleSyncOfflineQueue = useCallback(async () => {
     if (offlineQueue.length === 0 || syncingQueue || !selectedLot) return;
     setSyncingQueue(true);
@@ -449,12 +498,9 @@ export default function ReceiveScreen() {
             shippingType: item.shippingType || "air",
             targetLot: item.lotRef,
           };
-          setHistory((prev) =>
-            [record, ...prev.filter((r) => r.code !== item.trackingNo)].slice(
-              0,
-              30,
-            ),
-          );
+          const key = getReceiveHistoryKey(item.mawbUUID);
+          const updated = await appendScanRecord(key, record);
+          setHistory(updated);
           continue;
         }
 
@@ -495,12 +541,9 @@ export default function ReceiveScreen() {
             productName:
               response.data.data?.productName || response.data.data?.product,
           };
-          setHistory((prev) =>
-            [record, ...prev.filter((r) => r.code !== item.trackingNo)].slice(
-              0,
-              30,
-            ),
-          );
+          const key = getReceiveHistoryKey(item.mawbUUID);
+          const updated = await appendScanRecord(key, record);
+          setHistory(updated);
         } else {
           const msg = response.data?.message || "";
           if (
@@ -603,13 +646,11 @@ export default function ReceiveScreen() {
 
   const showScanError = useCallback(
     (kind: ScanErrorKind) => {
-      clearAutoSubmitTimer();
-      latestInputRef.current = "";
-      setInput("");
+      resetInput();
       inputRef.current?.blur();
       setScanError(kind);
     },
-    [clearAutoSubmitTimer],
+    [resetInput],
   );
 
   const confirmScanError = useCallback(() => {
@@ -702,9 +743,8 @@ export default function ReceiveScreen() {
           originalLot,
           targetLot: selectedLot.refLotNo,
         };
-        setHistory((prev) =>
-          [record, ...prev.filter((r) => r.code !== trackingNo)].slice(0, 30),
-        );
+        const key = getReceiveHistoryKey(selectedLot.mawbUUID);
+        void appendScanRecord(key, record).then(setHistory);
         setLastStatus(
           `${trackingNo} • Lot ไม่ตรง (${originalLot || "ไม่ระบุ"})`,
         );
@@ -732,8 +772,7 @@ export default function ReceiveScreen() {
           },
         });
 
-        latestInputRef.current = "";
-        setInput("");
+        resetInput();
         inputRef.current?.blur();
 
         setLotMismatchData({
@@ -785,7 +824,8 @@ export default function ReceiveScreen() {
             targetLot: selectedLot.refLotNo,
           };
           scannedCodesRef.current.add(normalized);
-          setHistory((prev) => [record, ...prev].slice(0, 30));
+          const testKey = getReceiveHistoryKey(selectedLot.mawbUUID);
+          void appendScanRecord(testKey, record).then(setHistory);
           setLastStatus(`${normalized} • ${shippingType.toUpperCase()}`);
           setHeroBanner({
             statusType: "success",
@@ -796,8 +836,7 @@ export default function ReceiveScreen() {
             subtitle: `Lot: ${selectedLot.refLotNo} • เวลา ${new Date().toLocaleTimeString("th-TH")}`,
           });
           triggerSuccessHaptic();
-          latestInputRef.current = "";
-          setInput("");
+          resetInput();
           if (shippingType === "sea") {
             void industrialAudio.playSound("sea");
           } else {
@@ -850,7 +889,8 @@ export default function ReceiveScreen() {
           };
 
           scannedCodesRef.current.add(normalized);
-          setHistory((prev) => [record, ...prev].slice(0, 30));
+          const liveKey = getReceiveHistoryKey(selectedLot.mawbUUID);
+          void appendScanRecord(liveKey, record).then(setHistory);
           setLastStatus(`${normalized} • ${shippingType.toUpperCase()}`);
 
           const productDesc =
@@ -869,9 +909,7 @@ export default function ReceiveScreen() {
             subtitle: `${productDesc} • เวลา ${new Date().toLocaleTimeString("th-TH")}`,
           });
           triggerSuccessHaptic();
-
-          latestInputRef.current = "";
-          setInput("");
+          resetInput();
 
           if (shippingType === "sea") {
             void industrialAudio.playSound("sea");
@@ -982,6 +1020,8 @@ export default function ReceiveScreen() {
     ],
   );
 
+  handleDetectedRef.current = handleDetected;
+
   const handleConfirmChangeLot = useCallback(async () => {
     if (!lotMismatchData) return;
     const { trackingNo, newLot } = lotMismatchData;
@@ -991,13 +1031,17 @@ export default function ReceiveScreen() {
       if (isScannerTestMode) {
         setLotMismatchData(null);
         scannedCodesRef.current.add(trackingNo);
-        setHistory((prev) =>
-          prev.map((item) =>
-            item.code === trackingNo
-              ? { ...item, status: "success", targetLot: newLot.refLotNo }
-              : item,
-          ),
-        );
+        const updatedRecord: ScanRecord = {
+          id: `${Date.now()}-${idCounter.current}`,
+          code: trackingNo,
+          scannedAt: new Date().toISOString(),
+          mode: "manual",
+          status: "success",
+          targetLot: newLot.refLotNo,
+          shippingType: newLot.shippingTypeCode?.toLowerCase() || "air",
+        };
+        const key = getReceiveHistoryKey(newLot.mawbUUID);
+        void appendScanRecord(key, updatedRecord).then(setHistory);
         setLastStatus(
           `${trackingNo} • เปลี่ยน Lot สำเร็จ (${newLot.refLotNo})`,
         );
@@ -1037,18 +1081,17 @@ export default function ReceiveScreen() {
       if (response.data && response.data.code === 200) {
         setLotMismatchData(null);
         scannedCodesRef.current.add(trackingNo);
-        setHistory((prev) =>
-          prev.map((item) =>
-            item.code === trackingNo
-              ? {
-                  ...item,
-                  status: "success",
-                  targetLot: newLot.refLotNo,
-                  shippingType,
-                }
-              : item,
-          ),
-        );
+        const updatedRecord: ScanRecord = {
+          id: `${Date.now()}-${idCounter.current}`,
+          code: trackingNo,
+          scannedAt: new Date().toISOString(),
+          mode: "manual",
+          status: "success",
+          targetLot: newLot.refLotNo,
+          shippingType,
+        };
+        const key = getReceiveHistoryKey(newLot.mawbUUID);
+        void appendScanRecord(key, updatedRecord).then(setHistory);
         setLastStatus(
           `${trackingNo} • เปลี่ยน Lot สำเร็จ (${newLot.refLotNo})`,
         );
@@ -1090,51 +1133,6 @@ export default function ReceiveScreen() {
     focusTrackingInput,
     lotMismatchData,
   ]);
-
-  // ใช้กับสแกนเนอร์ฮาร์ดแวร์ (RS51 ยิงแล้วส่งตัวอักษร + Enter เข้ามา)
-  const handleInputChange = useCallback(
-    (text: string) => {
-      if (
-        scanInFlightRef.current ||
-        scanError !== null ||
-        lotMismatchData !== null
-      )
-        return;
-
-      const sanitized = text.replaceAll(/[\r\n]/g, "");
-      const hasSubmitChar = /[\r\n]/.test(text);
-      latestInputRef.current = sanitized;
-      setInput(sanitized);
-      clearAutoSubmitTimer();
-
-      if (!autoEnter || !sanitized.trim()) return;
-      if (hasSubmitChar) {
-        void handleDetected(sanitized, "auto");
-        return;
-      }
-
-      autoSubmitTimerRef.current = setTimeout(() => {
-        const latestValue = latestInputRef.current.trim();
-        if (latestValue === sanitized.trim()) {
-          void handleDetected(latestValue, "auto");
-        }
-      }, SCANNER_AUTO_SUBMIT_DELAY_MS);
-    },
-    [
-      autoEnter,
-      clearAutoSubmitTimer,
-      handleDetected,
-      lotMismatchData,
-      scanError,
-    ],
-  );
-
-  const handleManualSubmit = () => {
-    const trackingNumber = latestInputRef.current;
-    if (!trackingNumber.trim() || !canScan) return;
-    clearAutoSubmitTimer();
-    void handleDetected(trackingNumber, autoEnter ? "auto" : "manual");
-  };
 
   const lotFilterTabs: ThumbFilterTab[] = useMemo(
     () => [
@@ -1283,11 +1281,15 @@ export default function ReceiveScreen() {
           <View style={styles.dummyButtonContent} />
         </TouchableOpacity>
 
-        {/* Compact Header - App Title + Logout */}
+        {/* Compact Header - App Title + Network Status + Logout */}
         <View style={styles.compactHeader}>
           <View style={styles.compactHeaderContent}>
             <Text style={styles.compactHeaderTitle}>📥 SHIP2CU Receive</Text>
           </View>
+          <NetworkStatusBadge
+            isOnline={isOnline}
+            isTestMode={isScannerTestMode}
+          />
           <TouchableOpacity
             style={styles.headerLogoutButton}
             onPress={handleLogout}
@@ -1491,11 +1493,7 @@ export default function ReceiveScreen() {
                       styles.keyboardToggleBtn,
                       showSoftKeyboard && styles.keyboardToggleBtnActive,
                     ]}
-                    onPress={() => {
-                      const nextState = !showSoftKeyboard;
-                      setShowSoftKeyboard(nextState);
-                      setTimeout(() => inputRef.current?.focus(), 100);
-                    }}
+                    onPress={toggleSoftKeyboard}
                     activeOpacity={0.7}
                   >
                     <Text style={styles.keyboardToggleIcon}>
@@ -1523,8 +1521,21 @@ export default function ReceiveScreen() {
             {/* Status & History with Monospace Digits Highlight */}
             <View style={[styles.section, styles.historySection]}>
               <View style={styles.statusHeader}>
-                <Text style={styles.sectionTitle}>ประวัติการสแกน</Text>
-                <Text style={styles.historyCount}>{history.length} รายการ</Text>
+                <Text style={styles.sectionTitle}>
+                  ประวัติการสแกน {selectedLot ? `(${selectedLot.refLotNo})` : ""}
+                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Text style={styles.historyCount}>{history.length} รายการ</Text>
+                  {history.length > 0 && (
+                    <TouchableOpacity
+                      onPress={handleClearBatchHistory}
+                      style={styles.clearBatchBtn}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.clearBatchBtnText}>ล้างรอบ</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
 
               {lastStatus !== "-" && (
@@ -2236,5 +2247,18 @@ const styles = StyleSheet.create({
   historyTime: {
     fontSize: 14,
     color: "#6B7280",
+  },
+  clearBatchBtn: {
+    backgroundColor: "#FEE2E2",
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: "#FCA5A5",
+  },
+  clearBatchBtnText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#DC2626",
   },
 });

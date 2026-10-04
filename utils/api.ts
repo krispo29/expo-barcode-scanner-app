@@ -1,10 +1,12 @@
 import axios from "axios";
 import { router } from "expo-router";
+import { Alert } from "react-native";
 import {
   AuthSessionExpiredError,
   clearStoredAuth,
   getValidAccessToken,
 } from "./auth";
+import { networkStatusManager } from "./networkStatus";
 
 const api = axios.create({
   baseURL: process.env.EXPO_PUBLIC_API_URL,
@@ -62,8 +64,23 @@ api.interceptors.request.use(
 );
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    networkStatusManager.setOnline(true);
+    return response;
+  },
   async (error) => {
+    const isNetworkErr =
+      !error?.response ||
+      error?.code === "ECONNABORTED" ||
+      error?.message?.includes("Network");
+
+    if (isNetworkErr) {
+      networkStatusManager.setOnline(false);
+    } else if (error?.response?.status && error.response.status < 500) {
+      // Reached server with 4xx status -> Network connection is alive
+      networkStatusManager.setOnline(true);
+    }
+
     const originalRequest = error.config;
 
     if (
@@ -72,8 +89,20 @@ api.interceptors.response.use(
       !originalRequest?._retry &&
       !isAuthWhitelistRequest(originalRequest?.url)
     ) {
-      console.warn("401 Unauthorized: state mismatch detected.");
-      await redirectToLogin();
+      console.warn("401 Unauthorized: Session expired.");
+      Alert.alert(
+        "เซสชันหมดอายุ (Session Expired)",
+        "กรุณาเข้าสู่ระบบใหม่อีกครั้ง รายการที่บันทึกไว้ในเครื่องและคิวออฟไลน์ยังคงปลอดภัย",
+        [
+          {
+            text: "เข้าสู่ระบบ",
+            onPress: () => {
+              void redirectToLogin();
+            },
+          },
+        ],
+        { cancelable: false },
+      );
     }
 
     return Promise.reject(error);
