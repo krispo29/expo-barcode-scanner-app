@@ -63,6 +63,18 @@ import {
   triggerSuccessHaptic,
   triggerWarningHaptic,
 } from "../../utils/haptics";
+import { ProductivityMetricsBar } from "../components/ProductivityMetricsBar";
+import {
+  calculateScanVelocity,
+  getInitialShiftMetrics,
+  getSoundSettings,
+  loadShiftMetrics,
+  METRICS_STORAGE_KEYS,
+  recordScanMetric,
+  resetShiftMetrics,
+  ShiftMetrics,
+} from "../../utils/productivityMetrics";
+import { industrialAudio } from "../../utils/industrialAudio";
 
 type ScanRecord = {
   id: string;
@@ -141,41 +153,61 @@ export default function ReceiveScreen() {
   const [lastStatus, setLastStatus] = useState<string>("-");
   const [scanError, setScanError] = useState<ScanErrorKind | null>(null);
 
-  // Sound objects for Receive: air, sea, beep
-  const [soundAir, setSoundAir] = useState<ExpoAudio.Sound>();
-  const [soundSea, setSoundSea] = useState<ExpoAudio.Sound>();
-  const [soundBeep, setSoundBeep] = useState<ExpoAudio.Sound>();
+  // Productivity Metrics & Sound States
+  const [shiftMetrics, setShiftMetrics] = useState<ShiftMetrics>(
+    getInitialShiftMetrics(),
+  );
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundBoosted, setSoundBoosted] = useState(false);
+  const [velocityTick, setVelocityTick] = useState(0);
 
-  // Load sounds
+  // Initialize Industrial Audio and Load Shift Metrics
   useEffect(() => {
-    async function loadSounds() {
-      try {
-        const { sound: s1 } = await ExpoAudio.Sound.createAsync(
-          require("../../assets/sounds/air.mp3"),
-        );
-        setSoundAir(s1);
+    void industrialAudio.initialize().then(async () => {
+      const settings = await getSoundSettings();
+      setSoundEnabled(settings.enabled);
+      setSoundBoosted(settings.boost);
+    });
+    void loadShiftMetrics(METRICS_STORAGE_KEYS.RECEIVE_METRICS).then(
+      setShiftMetrics,
+    );
+  }, []);
 
-        const { sound: s2 } = await ExpoAudio.Sound.createAsync(
-          require("../../assets/sounds/sea.mp3"),
-        );
-        setSoundSea(s2);
+  // SPM velocity decay timer (refreshes calculation every 5s while active)
+  useEffect(() => {
+    if (shiftMetrics.recentTimestamps.length === 0) return;
+    const interval = setInterval(() => {
+      setVelocityTick((t) => t + 1);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [shiftMetrics.recentTimestamps.length]);
 
-        const { sound: s3 } = await ExpoAudio.Sound.createAsync(
-          require("../../assets/sounds/beep.mp3"),
-        );
-        setSoundBeep(s3);
-      } catch (error) {
-        console.log("Error loading sounds", error);
-      }
-    }
+  const scanVelocitySpm = useMemo(() => {
+    return calculateScanVelocity(shiftMetrics.recentTimestamps);
+  }, [shiftMetrics.recentTimestamps, velocityTick]);
 
-    void loadSounds();
+  const activeLotCount = useMemo(() => {
+    if (!selectedLot) return 0;
+    return shiftMetrics.byCategory[selectedLot.refLotNo] || 0;
+  }, [selectedLot, shiftMetrics.byCategory]);
 
-    return () => {
-      soundAir?.unloadAsync();
-      soundSea?.unloadAsync();
-      soundBeep?.unloadAsync();
-    };
+  const handleResetTally = useCallback(async () => {
+    const fresh = await resetShiftMetrics(METRICS_STORAGE_KEYS.RECEIVE_METRICS);
+    setShiftMetrics(fresh);
+    triggerSuccessHaptic();
+  }, []);
+
+  const handleToggleSoundBoost = useCallback(async () => {
+    const next = await industrialAudio.toggleBoost();
+    setSoundBoosted(next);
+    triggerSuccessHaptic();
+    await industrialAudio.playSound("beep");
+  }, []);
+
+  const handleToggleSoundMute = useCallback(async () => {
+    const next = await industrialAudio.toggleEnabled();
+    setSoundEnabled(next);
+    triggerSuccessHaptic();
   }, []);
 
   const autoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -498,7 +530,7 @@ export default function ReceiveScreen() {
 
     if (syncedCount > 0) {
       triggerSuccessHaptic();
-      if (soundAir) void soundAir.replayAsync();
+      void industrialAudio.playSound("air");
       setHeroBanner({
         statusType: "success",
         title: `ซิงค์สำเร็จ ${syncedCount} รายการ!`,
@@ -526,7 +558,6 @@ export default function ReceiveScreen() {
     focusTrackingInput,
     offlineQueue,
     selectedLot,
-    soundAir,
     syncingQueue,
   ]);
 
@@ -589,16 +620,9 @@ export default function ReceiveScreen() {
 
   const playBeepPattern = useCallback(
     async (count: number) => {
-      if (!soundBeep) return;
-
-      for (let index = 0; index < count; index += 1) {
-        await soundBeep.replayAsync();
-        if (index < count - 1) {
-          await new Promise((resolve) => setTimeout(resolve, BEEP_GAP_MS));
-        }
-      }
+      await industrialAudio.playBeepPattern(count, BEEP_GAP_MS);
     },
-    [soundBeep],
+    [],
   );
 
   const playErrorSound = useCallback(
@@ -774,11 +798,15 @@ export default function ReceiveScreen() {
           triggerSuccessHaptic();
           latestInputRef.current = "";
           setInput("");
-          if (shippingType === "sea" && soundSea) {
-            await soundSea.replayAsync();
-          } else if (soundAir) {
-            await soundAir.replayAsync();
+          if (shippingType === "sea") {
+            void industrialAudio.playSound("sea");
+          } else {
+            void industrialAudio.playSound("air");
           }
+          void recordScanMetric(
+            METRICS_STORAGE_KEYS.RECEIVE_METRICS,
+            selectedLot.refLotNo,
+          ).then(setShiftMetrics);
           return;
         }
 
@@ -845,15 +873,15 @@ export default function ReceiveScreen() {
           latestInputRef.current = "";
           setInput("");
 
-          try {
-            if (shippingType === "sea" && soundSea) {
-              await soundSea.replayAsync();
-            } else if (soundAir) {
-              await soundAir.replayAsync();
-            }
-          } catch (err) {
-            console.log("Error playing sound", err);
+          if (shippingType === "sea") {
+            void industrialAudio.playSound("sea");
+          } else {
+            void industrialAudio.playSound("air");
           }
+          void recordScanMetric(
+            METRICS_STORAGE_KEYS.RECEIVE_METRICS,
+            selectedLot.refLotNo,
+          ).then(setShiftMetrics);
         } else {
           const responseMsg = response.data?.message;
           if (isLotMismatchError(responseMsg)) {
@@ -951,8 +979,6 @@ export default function ReceiveScreen() {
       playErrorSound,
       selectedLot,
       showScanError,
-      soundAir,
-      soundSea,
     ],
   );
 
@@ -980,11 +1006,16 @@ export default function ReceiveScreen() {
           title: "เปลี่ยน Lot สำเร็จ",
           trackingCode: trackingNo,
           badgeLabel: newLot.shippingTypeCode?.toUpperCase(),
-          badgeType: newLot.shippingTypeCode?.toLowerCase() === "sea" ? "sea" : "air",
+          badgeType:
+            newLot.shippingTypeCode?.toLowerCase() === "sea" ? "sea" : "air",
           subtitle: `ย้ายเข้า Lot: ${newLot.refLotNo}`,
         });
         triggerSuccessHaptic();
-        if (soundAir) await soundAir.replayAsync();
+        void industrialAudio.playSound("air");
+        void recordScanMetric(
+          METRICS_STORAGE_KEYS.RECEIVE_METRICS,
+          newLot.refLotNo,
+        ).then(setShiftMetrics);
         focusTrackingInput();
         return;
       }
@@ -1030,11 +1061,15 @@ export default function ReceiveScreen() {
           subtitle: `ย้ายเข้า Lot: ${newLot.refLotNo}`,
         });
         triggerSuccessHaptic();
-        if (shippingType === "sea" && soundSea) {
-          await soundSea.replayAsync();
-        } else if (soundAir) {
-          await soundAir.replayAsync();
+        if (shippingType === "sea") {
+          void industrialAudio.playSound("sea");
+        } else {
+          void industrialAudio.playSound("air");
         }
+        void recordScanMetric(
+          METRICS_STORAGE_KEYS.RECEIVE_METRICS,
+          newLot.refLotNo,
+        ).then(setShiftMetrics);
         focusTrackingInput();
       } else {
         Alert.alert(
@@ -1054,8 +1089,6 @@ export default function ReceiveScreen() {
     ensureAuthenticated,
     focusTrackingInput,
     lotMismatchData,
-    soundAir,
-    soundSea,
   ]);
 
   // ใช้กับสแกนเนอร์ฮาร์ดแวร์ (RS51 ยิงแล้วส่งตัวอักษร + Enter เข้ามา)
@@ -1264,6 +1297,19 @@ export default function ReceiveScreen() {
             <Text style={styles.headerLogoutText}>ออกจากระบบ</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Productivity Metrics Bar (Shift Tally, Scan Velocity SPM, Lot Count, Sound Booster) */}
+        <ProductivityMetricsBar
+          totalScans={shiftMetrics.totalScans}
+          scanVelocitySpm={scanVelocitySpm}
+          currentCategoryLabel={selectedLot ? selectedLot.refLotNo : "เลือก Lot"}
+          currentCategoryCount={activeLotCount}
+          soundEnabled={soundEnabled}
+          soundBoosted={soundBoosted}
+          onResetTally={handleResetTally}
+          onToggleSoundBoost={handleToggleSoundBoost}
+          onToggleSoundMute={handleToggleSoundMute}
+        />
 
         {/* Bottom Panel (Scrollable) */}
         <View

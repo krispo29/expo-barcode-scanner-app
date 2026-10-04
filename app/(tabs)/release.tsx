@@ -51,6 +51,18 @@ import {
   triggerSuccessHaptic,
   triggerWarningHaptic,
 } from "../../utils/haptics";
+import { ProductivityMetricsBar } from "../components/ProductivityMetricsBar";
+import {
+  calculateScanVelocity,
+  getInitialShiftMetrics,
+  getSoundSettings,
+  loadShiftMetrics,
+  METRICS_STORAGE_KEYS,
+  recordScanMetric,
+  resetShiftMetrics,
+  ShiftMetrics,
+} from "../../utils/productivityMetrics";
+import { industrialAudio } from "../../utils/industrialAudio";
 
 type Customer = {
   uuid: string;
@@ -139,34 +151,61 @@ export default function ReleaseScreen() {
   const [lastStatus, setLastStatus] = useState<string>("-");
   const [scanError, setScanError] = useState<ScanErrorKind | null>(null);
 
-  // Sound objects for Release: success, beep
-  const [soundSuccess, setSoundSuccess] = useState<ExpoAudio.Sound>();
-  const [soundBeep, setSoundBeep] = useState<ExpoAudio.Sound>();
+  // Productivity Metrics & Sound States
+  const [shiftMetrics, setShiftMetrics] = useState<ShiftMetrics>(
+    getInitialShiftMetrics(),
+  );
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundBoosted, setSoundBoosted] = useState(false);
+  const [velocityTick, setVelocityTick] = useState(0);
 
-  // Load sounds
+  // Initialize Industrial Audio and Load Shift Metrics
   useEffect(() => {
-    async function loadSounds() {
-      try {
-        const { sound: s1 } = await ExpoAudio.Sound.createAsync(
-          require("../../assets/sounds/success.mp3"),
-        );
-        setSoundSuccess(s1);
+    void industrialAudio.initialize().then(async () => {
+      const settings = await getSoundSettings();
+      setSoundEnabled(settings.enabled);
+      setSoundBoosted(settings.boost);
+    });
+    void loadShiftMetrics(METRICS_STORAGE_KEYS.RELEASE_METRICS).then(
+      setShiftMetrics,
+    );
+  }, []);
 
-        const { sound: s2 } = await ExpoAudio.Sound.createAsync(
-          require("../../assets/sounds/beep.mp3"),
-        );
-        setSoundBeep(s2);
-      } catch (error) {
-        console.log("Error loading sounds", error);
-      }
-    }
+  // SPM velocity decay timer (refreshes calculation every 5s while active)
+  useEffect(() => {
+    if (shiftMetrics.recentTimestamps.length === 0) return;
+    const interval = setInterval(() => {
+      setVelocityTick((t) => t + 1);
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [shiftMetrics.recentTimestamps.length]);
 
-    void loadSounds();
+  const scanVelocitySpm = useMemo(() => {
+    return calculateScanVelocity(shiftMetrics.recentTimestamps);
+  }, [shiftMetrics.recentTimestamps, velocityTick]);
 
-    return () => {
-      soundSuccess?.unloadAsync();
-      soundBeep?.unloadAsync();
-    };
+  const activeCustomerCount = useMemo(() => {
+    if (!customer) return 0;
+    return shiftMetrics.byCategory[customer.code] || 0;
+  }, [customer, shiftMetrics.byCategory]);
+
+  const handleResetTally = useCallback(async () => {
+    const fresh = await resetShiftMetrics(METRICS_STORAGE_KEYS.RELEASE_METRICS);
+    setShiftMetrics(fresh);
+    triggerSuccessHaptic();
+  }, []);
+
+  const handleToggleSoundBoost = useCallback(async () => {
+    const next = await industrialAudio.toggleBoost();
+    setSoundBoosted(next);
+    triggerSuccessHaptic();
+    await industrialAudio.playSound("beep");
+  }, []);
+
+  const handleToggleSoundMute = useCallback(async () => {
+    const next = await industrialAudio.toggleEnabled();
+    setSoundEnabled(next);
+    triggerSuccessHaptic();
   }, []);
 
   const autoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -259,16 +298,9 @@ export default function ReleaseScreen() {
 
   const playBeepPattern = useCallback(
     async (count: number) => {
-      if (!soundBeep) return;
-
-      for (let index = 0; index < count; index += 1) {
-        await soundBeep.replayAsync();
-        if (index < count - 1) {
-          await new Promise((resolve) => setTimeout(resolve, BEEP_GAP_MS));
-        }
-      }
+      await industrialAudio.playBeepPattern(count, BEEP_GAP_MS);
     },
-    [soundBeep],
+    [],
   );
 
   const playErrorSound = useCallback(
@@ -538,7 +570,7 @@ export default function ReleaseScreen() {
 
     if (syncedCount > 0) {
       triggerSuccessHaptic();
-      if (soundSuccess) void soundSuccess.replayAsync();
+      void industrialAudio.playSound("success");
       setHeroBanner({
         statusType: "success",
         title: `ซิงค์สำเร็จ ${syncedCount} รายการ!`,
@@ -566,7 +598,6 @@ export default function ReleaseScreen() {
     ensureAuthenticated,
     focusTrackingInput,
     offlineQueue,
-    soundSuccess,
     syncingQueue,
   ]);
 
@@ -707,7 +738,11 @@ export default function ReleaseScreen() {
           });
           triggerSuccessHaptic();
           setInput("");
-          if (soundSuccess) await soundSuccess.replayAsync();
+          void industrialAudio.playSound("success");
+          void recordScanMetric(
+            METRICS_STORAGE_KEYS.RELEASE_METRICS,
+            customer.code,
+          ).then(setShiftMetrics);
           return;
         }
 
@@ -760,14 +795,11 @@ export default function ReleaseScreen() {
           });
           triggerSuccessHaptic();
           setInput("");
-
-          if (soundSuccess) {
-            try {
-              await soundSuccess.replayAsync();
-            } catch (err) {
-              console.log("Error playing success sound", err);
-            }
-          }
+          void industrialAudio.playSound("success");
+          void recordScanMetric(
+            METRICS_STORAGE_KEYS.RELEASE_METRICS,
+            customer.code,
+          ).then(setShiftMetrics);
         } else {
           const errorKind = classifyScanError(
             response.data?.message,
@@ -852,7 +884,6 @@ export default function ReleaseScreen() {
       offlineQueue,
       playErrorSound,
       showScanError,
-      soundSuccess,
     ],
   );
 
@@ -1004,6 +1035,19 @@ export default function ReleaseScreen() {
             <Text style={styles.headerLogoutText}>ออกจากระบบ</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Productivity Metrics Bar (Shift Tally, Scan Velocity SPM, Customer Count, Sound Booster) */}
+        <ProductivityMetricsBar
+          totalScans={shiftMetrics.totalScans}
+          scanVelocitySpm={scanVelocitySpm}
+          currentCategoryLabel={customer ? customer.code : "เลือกลูกค้า"}
+          currentCategoryCount={activeCustomerCount}
+          soundEnabled={soundEnabled}
+          soundBoosted={soundBoosted}
+          onResetTally={handleResetTally}
+          onToggleSoundBoost={handleToggleSoundBoost}
+          onToggleSoundMute={handleToggleSoundMute}
+        />
 
         {/* Bottom Panel (Scrollable) */}
         <View
