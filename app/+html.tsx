@@ -20,7 +20,9 @@ export default function Root({ children }: { children: React.ReactNode }) {
 
         {/* Using raw CSS styles as an escape-hatch to ensure the background color never flickers in dark-mode. */}
         <style dangerouslySetInnerHTML={{ __html: responsiveBackground }} />
-        {/* Add any additional <head> elements that you want globally available on web... */}
+        <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+        <link rel="icon" type="image/png" sizes="48x48" href="/favicon.png" />
+        <title>SHIP2CU Scanner</title>
       </head>
       <body>{children}</body>
     </html>
