@@ -40,6 +40,15 @@ import {
   ThumbModalItem,
   ThumbFilterTab,
 } from "../components/ThumbSelectionModal";
+import { OfflineSyncBanner } from "../components/OfflineSyncBanner";
+import {
+  addToOfflineQueue,
+  getOfflineQueue,
+  isTrackingInQueue,
+  OFFLINE_STORAGE_KEYS,
+  ReceiveQueueItem,
+  removeFromOfflineQueue,
+} from "../../utils/offlineQueue";
 import { updateRecentIds } from "../../utils/recentSelections";
 import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
 import api from "../../utils/api";
@@ -113,6 +122,14 @@ export default function ReceiveScreen() {
   const [showSoftKeyboard, setShowSoftKeyboard] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [heroBanner, setHeroBanner] = useState<GlanceableHeroBannerProps | null>(null);
+
+  // Offline Buffer states
+  const [offlineQueue, setOfflineQueue] = useState<ReceiveQueueItem[]>([]);
+  const [syncingQueue, setSyncingQueue] = useState(false);
+  const [lastFailedScan, setLastFailedScan] = useState<{
+    trackingNo: string;
+    mode: "auto" | "manual";
+  } | null>(null);
 
   // Check if ready to scan
   const canScan = selectedLot !== null;
@@ -198,6 +215,20 @@ export default function ReceiveScreen() {
   useEffect(() => {
     if (!isScannerTestMode) void ensureAuthenticated();
   }, [ensureAuthenticated]);
+
+  const loadOfflineQueue = useCallback(async () => {
+    const queue = await getOfflineQueue<ReceiveQueueItem>(
+      OFFLINE_STORAGE_KEYS.RECEIVE_QUEUE,
+    );
+    setOfflineQueue(queue);
+    for (const item of queue) {
+      scannedCodesRef.current.add(item.trackingNo);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadOfflineQueue();
+  }, [loadOfflineQueue]);
 
   const loadLots = useCallback(async () => {
     if (isScannerTestMode) {
@@ -318,6 +349,187 @@ export default function ReceiveScreen() {
     [focusTrackingInput, handleSelectLot],
   );
 
+  const handleSaveFailedToOffline = useCallback(
+    async (overrideTracking?: string, overrideMode?: "auto" | "manual") => {
+      const tracking = overrideTracking || lastFailedScan?.trackingNo;
+      const mode = overrideMode || lastFailedScan?.mode || "auto";
+      if (!tracking || !selectedLot) return;
+
+      const queueItem: ReceiveQueueItem = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        trackingNo: tracking,
+        mawbUUID: selectedLot.mawbUUID,
+        lotRef: selectedLot.refLotNo,
+        shippingType: selectedLot.shippingTypeCode,
+        timestamp: new Date().toISOString(),
+        mode,
+      };
+
+      const updated = await addToOfflineQueue(
+        OFFLINE_STORAGE_KEYS.RECEIVE_QUEUE,
+        queueItem,
+      );
+      setOfflineQueue(updated);
+      scannedCodesRef.current.add(tracking);
+
+      setScanError(null);
+      setLastFailedScan(null);
+
+      setHeroBanner({
+        statusType: "warning",
+        title: "บันทึกลงคิวออฟไลน์แล้ว",
+        trackingCode: tracking,
+        badgeLabel: "OFFLINE QUEUED",
+        badgeType: "warning",
+        subtitle: `บันทึกในเครื่องแล้ว (รอซิงค์ ${updated.length} รายการ)`,
+      });
+      setLastStatus(`${tracking} • บันทึกคิวออฟไลน์ (${selectedLot.refLotNo})`);
+      triggerSuccessHaptic();
+      focusTrackingInput();
+    },
+    [focusTrackingInput, lastFailedScan, selectedLot],
+  );
+
+  const handleSyncOfflineQueue = useCallback(async () => {
+    if (offlineQueue.length === 0 || syncingQueue || !selectedLot) return;
+    setSyncingQueue(true);
+
+    let syncedCount = 0;
+    let failedCount = 0;
+    let currentQueue = [...offlineQueue];
+
+    for (const item of offlineQueue) {
+      try {
+        if (isScannerTestMode) {
+          currentQueue = await removeFromOfflineQueue(
+            OFFLINE_STORAGE_KEYS.RECEIVE_QUEUE,
+            item.id,
+          );
+          syncedCount += 1;
+
+          idCounter.current += 1;
+          const record: ScanRecord = {
+            id: `${Date.now()}-${idCounter.current}`,
+            code: item.trackingNo,
+            scannedAt: new Date().toISOString(),
+            mode: item.mode,
+            status: "success",
+            shippingType: item.shippingType || "air",
+            targetLot: item.lotRef,
+          };
+          setHistory((prev) =>
+            [record, ...prev.filter((r) => r.code !== item.trackingNo)].slice(
+              0,
+              30,
+            ),
+          );
+          continue;
+        }
+
+        const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+        const endpoint = `${apiUrl}/v1/orders/received_inbound/${item.trackingNo}?mawbUUID=${item.mawbUUID}&device=mobile`;
+        const token = await ensureAuthenticated();
+        if (!token) break;
+
+        const response = await api.get<ApiResponse>(endpoint, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (response.data && response.data.code === 200) {
+          currentQueue = await removeFromOfflineQueue(
+            OFFLINE_STORAGE_KEYS.RECEIVE_QUEUE,
+            item.id,
+          );
+          syncedCount += 1;
+
+          idCounter.current += 1;
+          const shippingType =
+            response.data.data?.shippingTypeCode?.toLowerCase() ||
+            item.shippingType ||
+            "air";
+
+          const record: ScanRecord = {
+            id: `${Date.now()}-${idCounter.current}`,
+            code: item.trackingNo,
+            scannedAt: new Date().toISOString(),
+            mode: item.mode,
+            status: "success",
+            shippingType,
+            targetLot: item.lotRef,
+            customerCode: response.data.data?.customerCode,
+            productName:
+              response.data.data?.productName || response.data.data?.product,
+          };
+          setHistory((prev) =>
+            [record, ...prev.filter((r) => r.code !== item.trackingNo)].slice(
+              0,
+              30,
+            ),
+          );
+        } else {
+          const msg = response.data?.message || "";
+          if (
+            msg.includes("ALREADY") ||
+            response.data?.code === "ALREADY_RECEIVED"
+          ) {
+            currentQueue = await removeFromOfflineQueue(
+              OFFLINE_STORAGE_KEYS.RECEIVE_QUEUE,
+              item.id,
+            );
+            syncedCount += 1;
+          } else {
+            failedCount += 1;
+          }
+        }
+      } catch (err: any) {
+        console.error(`Sync error for ${item.trackingNo}:`, err);
+        if (!err?.response || err?.code === "ECONNABORTED") {
+          failedCount += 1;
+          break;
+        }
+      }
+    }
+
+    setOfflineQueue(currentQueue);
+    setSyncingQueue(false);
+
+    if (syncedCount > 0) {
+      triggerSuccessHaptic();
+      if (soundAir) void soundAir.replayAsync();
+      setHeroBanner({
+        statusType: "success",
+        title: `ซิงค์สำเร็จ ${syncedCount} รายการ!`,
+        badgeLabel: "SYNCED",
+        badgeType: "default",
+        subtitle:
+          currentQueue.length > 0
+            ? `ยังเหลืออีก ${currentQueue.length} รายการในคิว`
+            : "ข้อมูลทั้งหมดถูกส่งขึ้นระบบเรียบร้อยแล้ว",
+      });
+      setLastStatus(`ซิงค์คิวสำเร็จ (${syncedCount} รายการ)`);
+    } else if (failedCount > 0) {
+      triggerWarningHaptic();
+      setHeroBanner({
+        statusType: "warning",
+        title: "การซิงค์ยังไม่เสร็จสิ้น",
+        badgeLabel: "RETRY",
+        badgeType: "warning",
+        subtitle: "กรุณาตรวจสอบสัญญาณอินเทอร์เน็ตแล้วลองใหม่อีกครั้ง",
+      });
+    }
+    focusTrackingInput();
+  }, [
+    ensureAuthenticated,
+    focusTrackingInput,
+    offlineQueue,
+    selectedLot,
+    soundAir,
+    syncingQueue,
+  ]);
+
   const handleLogout = async () => {
     // Safety: Prevent logout if a scan just happened (within 1000ms)
     if (Date.now() - lastScanRef.current.timestamp < 1000) {
@@ -371,6 +583,7 @@ export default function ReceiveScreen() {
 
   const confirmScanError = useCallback(() => {
     setScanError(null);
+    setLastFailedScan(null);
     focusTrackingInput();
   }, [focusTrackingInput]);
 
@@ -421,19 +634,22 @@ export default function ReceiveScreen() {
         return;
       }
 
-      const isDuplicate = scannedCodesRef.current.has(normalized);
+      const isDuplicate =
+        scannedCodesRef.current.has(normalized) ||
+        isTrackingInQueue(offlineQueue, normalized) ||
+        history.some((h) => h.code === normalized);
       if (isDuplicate) {
         setLastStatus(`${normalized} • สแกนซ้ำในเครื่องนี้`);
         setHeroBanner({
           statusType: "error",
-          title: "สแกนซ้ำแล้ว!",
+          title: "สแกนซ้ำแล้ว! (DUPLICATE)",
           trackingCode: normalized,
           badgeLabel: "DUPLICATE",
           badgeType: "error",
           subtitle: "รายการนี้ถูกสแกนในรอบนี้ไปแล้ว",
         });
         showScanError("duplicate");
-        triggerErrorHaptic();
+        triggerWarningHaptic();
         await playErrorSound("duplicate");
         return;
       }
@@ -679,22 +895,41 @@ export default function ReceiveScreen() {
           errorMessage = error.response.data.message;
         }
 
+        const isNetworkErr =
+          !error?.response ||
+          error?.code === "ECONNABORTED" ||
+          error?.message?.includes("Network");
         const status = Number(error?.response?.status);
         const systemFailure =
-          !error?.response || status === 401 || status === 403 || status >= 500;
+          isNetworkErr || status === 401 || status === 403 || status >= 500;
         const errorKind = classifyScanError(
           errorMessage,
           errorCode,
           systemFailure,
         );
+
+        if (isNetworkErr || systemFailure) {
+          setLastFailedScan({ trackingNo: normalized, mode });
+        }
+
         setLastStatus(`${normalized} • ${getScanErrorMessage(errorKind)}`);
         setHeroBanner({
           statusType: "error",
-          title: getScanErrorMessage(errorKind),
+          title: isNetworkErr
+            ? "สัญญาณขาดหาย (Offline)"
+            : getScanErrorMessage(errorKind),
           trackingCode: normalized,
-          badgeLabel: "ERROR",
+          badgeLabel: isNetworkErr ? "OFFLINE" : "ERROR",
           badgeType: "error",
-          subtitle: errorMessage,
+          subtitle: isNetworkErr
+            ? "ไม่สามารถส่งข้อมูลได้ — แตะ 'บันทึกคิวออฟไลน์' เพื่อทำงานต่อ"
+            : errorMessage,
+          actionText:
+            isNetworkErr || systemFailure ? "บันทึกคิวออฟไลน์" : undefined,
+          onActionPress:
+            isNetworkErr || systemFailure
+              ? () => void handleSaveFailedToOffline(normalized, mode)
+              : undefined,
         });
         modalOpened = true;
         showScanError(errorKind);
@@ -710,6 +945,9 @@ export default function ReceiveScreen() {
       clearAutoSubmitTimer,
       ensureAuthenticated,
       focusTrackingInput,
+      handleSaveFailedToOffline,
+      history,
+      offlineQueue,
       playErrorSound,
       selectedLot,
       showScanError,
@@ -939,7 +1177,13 @@ export default function ReceiveScreen() {
     <TouchableWithoutFeedback onPress={focusTrackingInput} accessible={false}>
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <StatusBar style="light" />
-        <ScanErrorModal kind={scanError} onConfirm={confirmScanError} />
+        <ScanErrorModal
+          kind={scanError}
+          onConfirm={confirmScanError}
+          onSaveToOffline={
+            lastFailedScan ? () => void handleSaveFailedToOffline() : undefined
+          }
+        />
         <ChangeLotModal
           visible={lotMismatchData !== null}
           trackingNo={lotMismatchData?.trackingNo || ""}
@@ -1140,6 +1384,13 @@ export default function ReceiveScreen() {
                 </View>
               )
             )}
+
+            {/* Offline Sync Banner (Visible when items waiting in queue) */}
+            <OfflineSyncBanner
+              count={offlineQueue.length}
+              syncing={syncingQueue}
+              onSync={() => void handleSyncOfflineQueue()}
+            />
 
             {/* Manual Input & Settings with Focus Shield & Soft Keyboard Suppression */}
             <View style={styles.section}>

@@ -55,12 +55,19 @@ export const getScanErrorMessage = (kind: ScanErrorKind) =>
       ? "ไม่สามารถตรวจสอบรายการได้"
       : "เลขนี้ไม่ถูกต้อง";
 
-type ScanErrorModalProps = {
+export type ScanErrorModalProps = {
   kind: ScanErrorKind | null;
   onConfirm: () => void;
+  onSaveToOffline?: () => void;
 };
 
-export function ScanErrorModal({ kind, onConfirm }: ScanErrorModalProps) {
+export function ScanErrorModal({
+  kind,
+  onConfirm,
+  onSaveToOffline,
+}: ScanErrorModalProps) {
+  const isSystemError = kind === "system";
+
   return (
     <Modal
       visible={kind !== null}
@@ -74,13 +81,53 @@ export function ScanErrorModal({ kind, onConfirm }: ScanErrorModalProps) {
           <Text style={styles.message}>
             {kind ? getScanErrorMessage(kind) : ""}
           </Text>
-          <TouchableOpacity
-            accessibilityRole="button"
-            style={styles.button}
-            onPress={onConfirm}
-          >
-            <Text style={styles.buttonText}>ยืนยัน</Text>
-          </TouchableOpacity>
+
+          {isSystemError && (
+            <Text style={styles.hint}>
+              อาจเกิดจากจุดอับสัญญาณ Wi-Fi หรือเครือข่ายขัดข้อง
+            </Text>
+          )}
+
+          <View style={styles.buttonContainer}>
+            {isSystemError && onSaveToOffline && (
+              <TouchableOpacity
+                accessibilityRole="button"
+                style={[styles.button, styles.offlineButton]}
+                onPress={onSaveToOffline}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.offlineButtonText}>
+                  📥 บันทึกลงคิวออฟไลน์
+                </Text>
+                <Text style={styles.offlineButtonSubtext}>
+                  เพื่อส่งขึ้นระบบอัตโนมัติเมื่อมีสัญญาณ
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              style={[
+                styles.button,
+                isSystemError && onSaveToOffline
+                  ? styles.secondaryConfirmButton
+                  : styles.button,
+              ]}
+              onPress={onConfirm}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={[
+                  styles.buttonText,
+                  isSystemError && onSaveToOffline
+                    ? styles.secondaryConfirmButtonText
+                    : undefined,
+                ]}
+              >
+                {isSystemError && onSaveToOffline ? "ปิดหน้าต่าง" : "ยืนยัน"}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </Modal>
@@ -99,34 +146,71 @@ const styles = StyleSheet.create({
     width: "100%",
     maxWidth: 420,
     alignItems: "center",
-    padding: 28,
-    borderWidth: 4,
+    padding: 24,
+    borderWidth: 3,
     borderColor: "#DC2626",
     borderRadius: 18,
     backgroundColor: "#FFF7ED",
   },
   icon: {
     marginBottom: 8,
-    fontSize: 48,
+    fontSize: 44,
     color: "#DC2626",
   },
   message: {
-    marginBottom: 24,
-    fontSize: 28,
+    marginBottom: 8,
+    fontSize: 24,
     fontWeight: "800",
     textAlign: "center",
     color: "#7F1D1D",
   },
+  hint: {
+    fontSize: 13,
+    color: "#991B1B",
+    textAlign: "center",
+    marginBottom: 20,
+    lineHeight: 18,
+  },
+  buttonContainer: {
+    width: "100%",
+    gap: 10,
+  },
   button: {
     width: "100%",
+    minHeight: 52,
     alignItems: "center",
-    paddingVertical: 14,
+    justifyContent: "center",
     borderRadius: 10,
     backgroundColor: "#DC2626",
+    paddingVertical: 12,
   },
   buttonText: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "800",
     color: "#FFFFFF",
+  },
+  offlineButton: {
+    backgroundColor: "#D97706",
+    paddingVertical: 10,
+  },
+  offlineButtonText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  offlineButtonSubtext: {
+    color: "#FEF3C7",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  secondaryConfirmButton: {
+    backgroundColor: "#FEE2E2",
+    borderWidth: 1,
+    borderColor: "#FCA5A5",
+  },
+  secondaryConfirmButtonText: {
+    color: "#991B1B",
+    fontSize: 15,
+    fontWeight: "700",
   },
 });

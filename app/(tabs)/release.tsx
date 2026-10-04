@@ -33,6 +33,15 @@ import {
   ThumbSelectionModal,
   ThumbModalItem,
 } from "../components/ThumbSelectionModal";
+import { OfflineSyncBanner } from "../components/OfflineSyncBanner";
+import {
+  addToOfflineQueue,
+  getOfflineQueue,
+  isTrackingInQueue,
+  OFFLINE_STORAGE_KEYS,
+  ReleaseQueueItem,
+  removeFromOfflineQueue,
+} from "../../utils/offlineQueue";
 import { updateRecentIds } from "../../utils/recentSelections";
 import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
 import api from "../../utils/api";
@@ -40,6 +49,7 @@ import { getScannerTestOutcome, isScannerTestMode } from "../../utils/scannerTes
 import {
   triggerErrorHaptic,
   triggerSuccessHaptic,
+  triggerWarningHaptic,
 } from "../../utils/haptics";
 
 type Customer = {
@@ -110,6 +120,14 @@ export default function ReleaseScreen() {
   const [showSoftKeyboard, setShowSoftKeyboard] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [heroBanner, setHeroBanner] = useState<GlanceableHeroBannerProps | null>(null);
+
+  // Offline Buffer states
+  const [offlineQueue, setOfflineQueue] = useState<ReleaseQueueItem[]>([]);
+  const [syncingQueue, setSyncingQueue] = useState(false);
+  const [lastFailedScan, setLastFailedScan] = useState<{
+    trackingNo: string;
+    mode: "auto" | "manual";
+  } | null>(null);
 
   // Check if ready to scan
   const canScan = customer !== null;
@@ -191,6 +209,20 @@ export default function ReleaseScreen() {
     if (!isScannerTestMode) void ensureAuthenticated();
   }, [ensureAuthenticated]);
 
+  const loadOfflineQueue = useCallback(async () => {
+    const queue = await getOfflineQueue<ReleaseQueueItem>(
+      OFFLINE_STORAGE_KEYS.RELEASE_QUEUE,
+    );
+    setOfflineQueue(queue);
+    for (const item of queue) {
+      scannedCodesRef.current.add(item.trackingNo);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadOfflineQueue();
+  }, [loadOfflineQueue]);
+
   useEffect(() => {
     if (isScannerTestMode) {
       setCustomer(TEST_CUSTOMER);
@@ -221,6 +253,7 @@ export default function ReleaseScreen() {
 
   const confirmScanError = useCallback(() => {
     setScanError(null);
+    setLastFailedScan(null);
     focusTrackingInput();
   }, [focusTrackingInput]);
 
@@ -363,6 +396,180 @@ export default function ReleaseScreen() {
     };
   }, [ensureAuthenticated]);
 
+  const handleSaveFailedToOffline = useCallback(
+    async (overrideTracking?: string, overrideMode?: "auto" | "manual") => {
+      const tracking = overrideTracking || lastFailedScan?.trackingNo;
+      const mode = overrideMode || lastFailedScan?.mode || "auto";
+      if (!tracking || !customer) return;
+
+      const queueItem: ReleaseQueueItem = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        trackingNo: tracking,
+        customerUuid: customer.uuid,
+        customerCode: customer.code,
+        timestamp: new Date().toISOString(),
+        mode,
+      };
+
+      const updated = await addToOfflineQueue(
+        OFFLINE_STORAGE_KEYS.RELEASE_QUEUE,
+        queueItem,
+      );
+      setOfflineQueue(updated);
+      scannedCodesRef.current.add(tracking);
+
+      setScanError(null);
+      setLastFailedScan(null);
+
+      setHeroBanner({
+        statusType: "warning",
+        title: "บันทึกลงคิวออฟไลน์แล้ว",
+        trackingCode: tracking,
+        badgeLabel: "OFFLINE QUEUED",
+        badgeType: "warning",
+        subtitle: `บันทึกในเครื่องแล้ว (รอซิงค์ ${updated.length} รายการ)`,
+      });
+      setLastStatus(`${tracking} • บันทึกคิวออฟไลน์ (${customer.code})`);
+      triggerSuccessHaptic();
+      focusTrackingInput();
+    },
+    [customer, focusTrackingInput, lastFailedScan],
+  );
+
+  const handleSyncOfflineQueue = useCallback(async () => {
+    if (offlineQueue.length === 0 || syncingQueue || !customer) return;
+    setSyncingQueue(true);
+
+    let syncedCount = 0;
+    let failedCount = 0;
+    let currentQueue = [...offlineQueue];
+
+    for (const item of offlineQueue) {
+      try {
+        if (isScannerTestMode) {
+          currentQueue = await removeFromOfflineQueue(
+            OFFLINE_STORAGE_KEYS.RELEASE_QUEUE,
+            item.id,
+          );
+          syncedCount += 1;
+
+          idCounter.current += 1;
+          const record: ScanRecord = {
+            id: `${Date.now()}-${idCounter.current}`,
+            customerId: item.customerUuid,
+            customerCode: item.customerCode,
+            code: item.trackingNo,
+            scannedAt: new Date().toISOString(),
+            mode: item.mode,
+          };
+          setHistory((prev) =>
+            [record, ...prev.filter((r) => r.code !== item.trackingNo)].slice(
+              0,
+              30,
+            ),
+          );
+          continue;
+        }
+
+        const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+        const endpoint = `${apiUrl}/v1/orders/released/${item.trackingNo}?customer_code=${item.customerCode}&device=mobile`;
+        const token = await ensureAuthenticated();
+        if (!token) break;
+
+        const response = await api.get<ApiResponse>(endpoint, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (response.data && response.data.code === 200) {
+          currentQueue = await removeFromOfflineQueue(
+            OFFLINE_STORAGE_KEYS.RELEASE_QUEUE,
+            item.id,
+          );
+          syncedCount += 1;
+
+          idCounter.current += 1;
+          const record: ScanRecord = {
+            id: `${Date.now()}-${idCounter.current}`,
+            customerId: item.customerUuid,
+            customerCode: item.customerCode,
+            code: item.trackingNo,
+            scannedAt: new Date().toISOString(),
+            mode: item.mode,
+          };
+          setHistory((prev) =>
+            [record, ...prev.filter((r) => r.code !== item.trackingNo)].slice(
+              0,
+              30,
+            ),
+          );
+        } else {
+          const msg = response.data?.message || "";
+          if (
+            msg.includes("ALREADY") ||
+            response.data?.code === "ALREADY_RELEASED"
+          ) {
+            currentQueue = await removeFromOfflineQueue(
+              OFFLINE_STORAGE_KEYS.RELEASE_QUEUE,
+              item.id,
+            );
+            syncedCount += 1;
+          } else {
+            failedCount += 1;
+          }
+        }
+      } catch (err: any) {
+        console.error(`Sync error for ${item.trackingNo}:`, err);
+        if (
+          !err?.response ||
+          err?.code === "ECONNABORTED" ||
+          err?.message?.includes("Network")
+        ) {
+          failedCount += 1;
+          break;
+        }
+      }
+    }
+
+    setOfflineQueue(currentQueue);
+    setSyncingQueue(false);
+
+    if (syncedCount > 0) {
+      triggerSuccessHaptic();
+      if (soundSuccess) void soundSuccess.replayAsync();
+      setHeroBanner({
+        statusType: "success",
+        title: `ซิงค์สำเร็จ ${syncedCount} รายการ!`,
+        badgeLabel: "SYNCED",
+        badgeType: "default",
+        subtitle:
+          currentQueue.length > 0
+            ? `ยังเหลืออีก ${currentQueue.length} รายการในคิว`
+            : "ข้อมูลปล่อยออกทั้งหมดถูกส่งขึ้นระบบเรียบร้อยแล้ว",
+      });
+      setLastStatus(`ซิงค์คิวสำเร็จ (${syncedCount} รายการ)`);
+    } else if (failedCount > 0) {
+      triggerWarningHaptic();
+      setHeroBanner({
+        statusType: "warning",
+        title: "การซิงค์ยังไม่เสร็จสิ้น",
+        badgeLabel: "RETRY",
+        badgeType: "warning",
+        subtitle: "กรุณาตรวจสอบสัญญาณอินเทอร์เน็ตแล้วลองใหม่อีกครั้ง",
+      });
+    }
+    focusTrackingInput();
+  }, [
+    customer,
+    ensureAuthenticated,
+    focusTrackingInput,
+    offlineQueue,
+    soundSuccess,
+    syncingQueue,
+  ]);
+
   const handleLogout = async () => {
     if (Date.now() - lastScanRef.current.timestamp < 1000) {
       console.log("Logout blocked - recent scan detected");
@@ -430,19 +637,22 @@ export default function ReleaseScreen() {
         return;
       }
 
-      const isDuplicate = scannedCodesRef.current.has(normalized);
+      const isDuplicate =
+        scannedCodesRef.current.has(normalized) ||
+        isTrackingInQueue(offlineQueue, normalized) ||
+        history.some((h) => h.code === normalized);
       if (isDuplicate) {
         setLastStatus(`${normalized} • ยิงออกซ้ำในเครื่องนี้`);
         setHeroBanner({
           statusType: "error",
-          title: "ยิงออกซ้ำแล้ว!",
+          title: "ยิงออกซ้ำแล้ว! (DUPLICATE)",
           trackingCode: normalized,
           badgeLabel: "DUPLICATE",
           badgeType: "error",
-          subtitle: "รายการนี้ถูกยิงปล่อยออกไปแล้ว",
+          subtitle: "รายการนี้ถูกยิงปล่อยออกในรอบนี้ไปแล้ว",
         });
         showScanError("duplicate");
-        triggerErrorHaptic();
+        triggerWarningHaptic();
         await playErrorSound("duplicate");
         return;
       }
@@ -585,22 +795,41 @@ export default function ReleaseScreen() {
           errorMessage = error.response.data.message;
         }
 
+        const isNetworkErr =
+          !error?.response ||
+          error?.code === "ECONNABORTED" ||
+          error?.message?.includes("Network");
         const status = Number(error?.response?.status);
         const systemFailure =
-          !error?.response || status === 401 || status === 403 || status >= 500;
+          isNetworkErr || status === 401 || status === 403 || status >= 500;
         const errorKind = classifyScanError(
           errorMessage,
           errorCode,
           systemFailure,
         );
+
+        if (isNetworkErr || systemFailure) {
+          setLastFailedScan({ trackingNo: normalized, mode });
+        }
+
         setLastStatus(`${normalized} • ${getScanErrorMessage(errorKind)}`);
         setHeroBanner({
           statusType: "error",
-          title: getScanErrorMessage(errorKind),
+          title: isNetworkErr
+            ? "สัญญาณขาดหาย (Offline)"
+            : getScanErrorMessage(errorKind),
           trackingCode: normalized,
-          badgeLabel: "ERROR",
+          badgeLabel: isNetworkErr ? "OFFLINE" : "ERROR",
           badgeType: "error",
-          subtitle: errorMessage,
+          subtitle: isNetworkErr
+            ? "ไม่สามารถส่งข้อมูลได้ — แตะ 'บันทึกคิวออฟไลน์' เพื่อทำงานต่อ"
+            : errorMessage,
+          actionText:
+            isNetworkErr || systemFailure ? "บันทึกคิวออฟไลน์" : undefined,
+          onActionPress:
+            isNetworkErr || systemFailure
+              ? () => void handleSaveFailedToOffline(normalized, mode)
+              : undefined,
         });
         modalOpened = true;
         showScanError(errorKind);
@@ -618,6 +847,9 @@ export default function ReleaseScreen() {
       customer,
       ensureAuthenticated,
       focusTrackingInput,
+      handleSaveFailedToOffline,
+      history,
+      offlineQueue,
       playErrorSound,
       showScanError,
       soundSuccess,
@@ -713,7 +945,13 @@ export default function ReleaseScreen() {
   return (
     <TouchableWithoutFeedback onPress={focusTrackingInput} accessible={false}>
       <View style={[styles.container, { paddingTop: insets.top }]}>
-        <ScanErrorModal kind={scanError} onConfirm={confirmScanError} />
+        <ScanErrorModal
+          kind={scanError}
+          onConfirm={confirmScanError}
+          onSaveToOffline={
+            lastFailedScan ? () => void handleSaveFailedToOffline() : undefined
+          }
+        />
 
         {/* Thumb-friendly Customer Selection Modal */}
         <ThumbSelectionModal
@@ -870,6 +1108,13 @@ export default function ReleaseScreen() {
                 </View>
               )
             )}
+
+            {/* Offline Sync Banner (Visible when items waiting in queue) */}
+            <OfflineSyncBanner
+              count={offlineQueue.length}
+              syncing={syncingQueue}
+              onSync={() => void handleSyncOfflineQueue()}
+            />
 
             {/* Manual Input & Settings with Focus Shield & Soft Keyboard Suppression */}
             <View style={styles.section}>
