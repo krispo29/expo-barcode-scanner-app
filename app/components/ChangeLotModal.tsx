@@ -22,14 +22,34 @@ export const extractOriginalLot = (message?: string): string => {
   return "";
 };
 
+export type MinimalLot = {
+  code: string;
+  refLotNo: string;
+  [key: string]: any;
+};
+
+export const findLotByCodeOrRef = <T extends MinimalLot>(
+  lots: T[],
+  query?: string,
+): T | undefined => {
+  if (!query || typeof query !== "string") return undefined;
+  const clean = query.trim().toLowerCase();
+  return lots.find(
+    (lot) =>
+      lot.refLotNo.toLowerCase() === clean || lot.code.toLowerCase() === clean,
+  );
+};
+
 export type ChangeLotModalProps = {
   visible: boolean;
   trackingNo: string;
   originalLot: string;
   newLotLabel: string;
   loading?: boolean;
+  canSwitchToOriginal?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  onSwitchToOriginalLot?: () => void;
 };
 
 export function ChangeLotModal({
@@ -38,8 +58,10 @@ export function ChangeLotModal({
   originalLot,
   newLotLabel,
   loading = false,
+  canSwitchToOriginal = false,
   onCancel,
   onConfirm,
+  onSwitchToOriginalLot,
 }: ChangeLotModalProps) {
   return (
     <Modal
@@ -51,10 +73,10 @@ export function ChangeLotModal({
       <View style={styles.backdrop}>
         <View accessibilityRole="alert" style={styles.card}>
           <Text style={styles.title}>
-            ยืนยันการเปลี่ยน Lot / Confirm Change Lot
+            แจ้งเตือน: Lot ไม่ตรงกับที่เลือก
           </Text>
           <Text style={styles.subtitle}>
-            คุณต้องการยืนยันการเปลี่ยน Lot สำหรับ Tracking นี้และทำการ Receive หรือไม่?
+            พัสดุนี้ผูกอยู่กับ Lot เดิม คุณต้องการดำเนินการอย่างไร?
           </Text>
 
           <View style={styles.detailBox}>
@@ -64,7 +86,7 @@ export function ChangeLotModal({
             </View>
 
             <View style={styles.row}>
-              <Text style={styles.label}>Lot เดิมของ Tracking: </Text>
+              <Text style={styles.label}>Lot เดิมของพัสดุ: </Text>
               <View style={styles.badgeOriginal}>
                 <Text style={styles.badgeOriginalText}>
                   {originalLot || "ไม่ระบุ"}
@@ -73,23 +95,30 @@ export function ChangeLotModal({
             </View>
 
             <View style={styles.row}>
-              <Text style={styles.label}>Lot ใหม่ที่เลือก: </Text>
+              <Text style={styles.label}>Lot ปัจจุบันของเครื่อง: </Text>
               <View style={styles.badgeNew}>
                 <Text style={styles.badgeNewText}>{newLotLabel}</Text>
               </View>
             </View>
           </View>
 
-          <View style={styles.buttonContainer}>
-            <TouchableOpacity
-              accessibilityRole="button"
-              style={[styles.button, styles.cancelButton]}
-              onPress={onCancel}
-              disabled={loading}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.cancelButtonText}>ยกเลิก / Cancel</Text>
-            </TouchableOpacity>
+          <View style={styles.actionsContainer}>
+            {canSwitchToOriginal && onSwitchToOriginalLot && (
+              <TouchableOpacity
+                accessibilityRole="button"
+                style={[styles.button, styles.switchLotButton]}
+                onPress={onSwitchToOriginalLot}
+                disabled={loading}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.switchLotButtonText}>
+                  ⚡ สลับเครื่องเป็น Lot เดิม ({originalLot})
+                </Text>
+                <Text style={styles.switchLotButtonHint}>
+                  เหมาะสำหรับเมื่อต้องการสแกนต่อก้อนนี้ทันที
+                </Text>
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               accessibilityRole="button"
@@ -101,8 +130,25 @@ export function ChangeLotModal({
               {loading ? (
                 <ActivityIndicator color="#FFFFFF" size="small" />
               ) : (
-                <Text style={styles.confirmButtonText}>ยืนยันเปลี่ยน Lot</Text>
+                <>
+                  <Text style={styles.confirmButtonText}>
+                    📦 ย้ายพัสดุเข้า Lot นี้ ({newLotLabel.split("|")[0].trim()})
+                  </Text>
+                  <Text style={styles.confirmButtonHint}>
+                    เปลี่ยนรหัส Lot ของพัสดุในระบบ
+                  </Text>
+                </>
               )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              accessibilityRole="button"
+              style={[styles.button, styles.cancelButton]}
+              onPress={onCancel}
+              disabled={loading}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.cancelButtonText}>ยกเลิก / ปิดหน้าต่าง</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -116,18 +162,18 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    padding: 20,
-    backgroundColor: "rgba(0, 0, 0, 0.65)",
+    padding: 16,
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
   },
   card: {
     width: "100%",
-    maxWidth: 500,
+    maxWidth: 480,
     backgroundColor: "#FFFFFF",
     borderRadius: 16,
-    padding: 24,
+    padding: 20,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
+    shadowOpacity: 0.18,
     shadowRadius: 12,
     elevation: 8,
   },
@@ -135,21 +181,21 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
     color: "#1E293B",
-    marginBottom: 8,
+    marginBottom: 6,
   },
   subtitle: {
-    fontSize: 14,
-    color: "#475569",
-    marginBottom: 20,
-    lineHeight: 20,
+    fontSize: 13,
+    color: "#64748B",
+    marginBottom: 16,
+    lineHeight: 18,
   },
   detailBox: {
     borderWidth: 1,
     borderColor: "#E2E8F0",
     borderRadius: 10,
-    padding: 16,
+    padding: 14,
     backgroundColor: "#F8FAFC",
-    marginBottom: 24,
+    marginBottom: 16,
   },
   row: {
     flexDirection: "row",
@@ -158,13 +204,13 @@ const styles = StyleSheet.create({
     marginVertical: 4,
   },
   label: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "600",
     color: "#334155",
   },
   trackingText: {
     fontSize: 15,
-    fontWeight: "700",
+    fontWeight: "800",
     color: "#D97706",
   },
   badgeOriginal: {
@@ -176,10 +222,10 @@ const styles = StyleSheet.create({
   badgeOriginalText: {
     color: "#FFFFFF",
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "700",
   },
   badgeNew: {
-    backgroundColor: "#06B6D4",
+    backgroundColor: "#0284C7",
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
@@ -187,28 +233,33 @@ const styles = StyleSheet.create({
   badgeNewText: {
     color: "#FFFFFF",
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "700",
   },
-  buttonContainer: {
-    flexDirection: "row",
-    justifyContent: "flex-end",
-    gap: 12,
+  actionsContainer: {
+    flexDirection: "column",
+    gap: 10,
   },
   button: {
-    minWidth: 130,
+    width: "100%",
     paddingVertical: 12,
-    paddingHorizontal: 18,
-    borderRadius: 8,
+    paddingHorizontal: 16,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
+    minHeight: 48,
   },
-  cancelButton: {
-    backgroundColor: "#F43F5E",
+  switchLotButton: {
+    backgroundColor: "#0284C7",
   },
-  cancelButtonText: {
+  switchLotButtonText: {
     color: "#FFFFFF",
     fontSize: 14,
     fontWeight: "700",
+  },
+  switchLotButtonHint: {
+    color: "#BAE6FD",
+    fontSize: 11,
+    marginTop: 2,
   },
   confirmButton: {
     backgroundColor: "#F59E0B",
@@ -217,5 +268,20 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 14,
     fontWeight: "700",
+  },
+  confirmButtonHint: {
+    color: "#FEF3C7",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  cancelButton: {
+    backgroundColor: "#F1F5F9",
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+  },
+  cancelButtonText: {
+    color: "#475569",
+    fontSize: 13,
+    fontWeight: "600",
   },
 });

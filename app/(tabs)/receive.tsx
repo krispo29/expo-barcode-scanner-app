@@ -2,7 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Audio as ExpoAudio } from "expo-av";
 import { useFocusEffect, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AppState,
   Alert,
@@ -26,6 +26,7 @@ import {
 import {
   ChangeLotModal,
   extractOriginalLot,
+  findLotByCodeOrRef,
   isLotMismatchError,
 } from "../components/ChangeLotModal";
 import {
@@ -33,6 +34,13 @@ import {
   GlanceableHeroBannerProps,
 } from "../components/GlanceableHeroBanner";
 import { TrackingCodeText } from "../components/TrackingCodeText";
+import { QuickChips, QuickChipItem } from "../components/QuickChips";
+import {
+  ThumbSelectionModal,
+  ThumbModalItem,
+  ThumbFilterTab,
+} from "../components/ThumbSelectionModal";
+import { updateRecentIds } from "../../utils/recentSelections";
 import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
 import api from "../../utils/api";
 import {
@@ -88,8 +96,10 @@ export default function ReceiveScreen() {
   const [selectedLot, setSelectedLot] = useState<LotNo | null>(null);
   const [lots, setLots] = useState<LotNo[]>([]);
   const [loadingLots, setLoadingLots] = useState(false);
-  const [showLotDropdown, setShowLotDropdown] = useState(false);
+  const [showLotModal, setShowLotModal] = useState(false);
   const [lotSearch, setLotSearch] = useState("");
+  const [recentLotMawbs, setRecentLotMawbs] = useState<string[]>([]);
+  const [lotFilterTab, setLotFilterTab] = useState<string>("all");
 
   // Change Lot Modal states
   const [lotMismatchData, setLotMismatchData] = useState<{
@@ -171,12 +181,12 @@ export default function ReceiveScreen() {
     setTimeout(() => inputRef.current?.focus(), 150);
   }, []);
 
-  // โฟกัสช่อง Tracking Number อัตโนมัติเมื่อเลือก Lot แล้ว และ dropdown ปิด
+  // โฟกัสช่อง Tracking Number อัตโนมัติเมื่อเลือก Lot แล้ว และ modal ปิด
   useEffect(() => {
-    if (selectedLot && !showLotDropdown && inputRef.current) {
+    if (selectedLot && !showLotModal && inputRef.current) {
       focusTrackingInput();
     }
-  }, [focusTrackingInput, selectedLot, showLotDropdown]);
+  }, [focusTrackingInput, selectedLot, showLotModal]);
 
   // เคลียร์ timer ตอน unmount
   useEffect(() => {
@@ -193,6 +203,7 @@ export default function ReceiveScreen() {
     if (isScannerTestMode) {
       setLots(TEST_LOTS);
       setSelectedLot((prev) => prev || TEST_LOTS[0]);
+      setRecentLotMawbs(TEST_LOTS.map((l) => l.mawbUUID));
       return;
     }
 
@@ -224,6 +235,16 @@ export default function ReceiveScreen() {
         if (savedMawbUUID) {
           const match = fetchedLots.find((l) => l.mawbUUID === savedMawbUUID);
           if (match) setSelectedLot(match);
+        }
+
+        // ดึงรายการ Lot ล่าสุด (Recents)
+        const savedRecents = await AsyncStorage.getItem("@recent_lots");
+        if (savedRecents) {
+          try {
+            setRecentLotMawbs(JSON.parse(savedRecents));
+          } catch (e) {
+            console.error("Error parsing recent lots:", e);
+          }
         }
       }
     } catch (error) {
@@ -261,8 +282,14 @@ export default function ReceiveScreen() {
   const handleSelectLot = useCallback(
     (lot: LotNo) => {
       setSelectedLot(lot);
-      setShowLotDropdown(false);
+      setShowLotModal(false);
       void AsyncStorage.setItem("@selected_lot_mawb", lot.mawbUUID);
+      setRecentLotMawbs((prev) => {
+        const next = updateRecentIds(prev, lot.mawbUUID, 4);
+        void AsyncStorage.setItem("@recent_lots", JSON.stringify(next));
+        return next;
+      });
+      triggerSuccessHaptic();
       setHeroBanner({
         statusType: "idle",
         title: `เลือก Lot: ${lot.refLotNo}`,
@@ -273,6 +300,22 @@ export default function ReceiveScreen() {
       focusTrackingInput();
     },
     [focusTrackingInput],
+  );
+
+  const handleSwitchDeviceLot = useCallback(
+    (targetLot: LotNo) => {
+      handleSelectLot(targetLot);
+      setLotMismatchData(null);
+      setHeroBanner({
+        statusType: "idle",
+        title: `สลับเครื่องเป็น: ${targetLot.refLotNo}`,
+        subtitle: `เปลี่ยนเป็น Lot ${targetLot.code} เรียบร้อยแล้ว พร้อมสแกนต่อทันที`,
+        badgeLabel: targetLot.shippingTypeCode?.toUpperCase(),
+        badgeType: targetLot.shippingTypeCode?.toLowerCase() === "sea" ? "sea" : "air",
+      });
+      focusTrackingInput();
+    },
+    [focusTrackingInput, handleSelectLot],
   );
 
   const handleLogout = async () => {
@@ -407,6 +450,8 @@ export default function ReceiveScreen() {
         triggerWarningHaptic();
         void playErrorSound("generic");
 
+        const matchingLot = findLotByCodeOrRef(lots, originalLot);
+
         idCounter.current += 1;
         const record: ScanRecord = {
           id: `${Date.now()}-${idCounter.current}`,
@@ -431,13 +476,19 @@ export default function ReceiveScreen() {
           badgeLabel: "Lot Mismatch",
           badgeType: "warning",
           subtitle: `Lot เดิม: ${originalLot || "ไม่ระบุ"} | เลือก Lot: ${selectedLot.refLotNo}`,
-          actionText: "เปลี่ยน Lot",
+          actionText: matchingLot
+            ? `สลับเครื่องเป็น ${matchingLot.refLotNo}`
+            : "เปลี่ยน Lot",
           onActionPress: () => {
-            setLotMismatchData({
-              trackingNo,
-              originalLot: originalLot || "",
-              newLot: selectedLot,
-            });
+            if (matchingLot) {
+              handleSwitchDeviceLot(matchingLot);
+            } else {
+              setLotMismatchData({
+                trackingNo,
+                originalLot: originalLot || "",
+                newLot: selectedLot,
+              });
+            }
           },
         });
 
@@ -814,13 +865,75 @@ export default function ReceiveScreen() {
     void handleDetected(trackingNumber, autoEnter ? "auto" : "manual");
   };
 
-  const filteredLots = lots.filter(
-    (item) =>
-      item.refLotNo.toLowerCase().includes(lotSearch.toLowerCase()) ||
-      item.code.toLowerCase().includes(lotSearch.toLowerCase()) ||
-      (item.company &&
-        item.company.toLowerCase().includes(lotSearch.toLowerCase())),
+  const lotFilterTabs: ThumbFilterTab[] = useMemo(
+    () => [
+      { key: "all", label: "ทั้งหมด" },
+      { key: "air", label: "✈️ แอร์ (Air)" },
+      { key: "sea", label: "🚢 เรือ (Sea)" },
+    ],
+    [],
   );
+
+  const filteredLots = useMemo(() => {
+    return lots.filter((item) => {
+      if (lotFilterTab === "air" && item.shippingTypeCode?.toLowerCase() !== "air") {
+        return false;
+      }
+      if (lotFilterTab === "sea" && item.shippingTypeCode?.toLowerCase() !== "sea") {
+        return false;
+      }
+      if (!lotSearch.trim()) return true;
+      const q = lotSearch.toLowerCase();
+      return (
+        item.refLotNo.toLowerCase().includes(q) ||
+        item.code.toLowerCase().includes(q) ||
+        (item.company && item.company.toLowerCase().includes(q))
+      );
+    });
+  }, [lots, lotFilterTab, lotSearch]);
+
+  const modalLotItems: ThumbModalItem[] = useMemo(() => {
+    return filteredLots.map((item) => {
+      const isAir = item.shippingTypeCode?.toLowerCase() === "air";
+      return {
+        id: item.mawbUUID,
+        title: item.refLotNo,
+        subtitle: `Code: ${item.code} | บริษัท: ${item.company || "-"} | วันที่: ${item.createdAt || "-"}`,
+        badge: {
+          text: item.shippingTypeCode?.toUpperCase() || "AIR",
+          variant: isAir ? "blue" : "green",
+        },
+        selected: selectedLot?.mawbUUID === item.mawbUUID,
+      };
+    });
+  }, [filteredLots, selectedLot]);
+
+  const quickLotChips: QuickChipItem[] = useMemo(() => {
+    if (lots.length === 0) return [];
+    const chipsLots: LotNo[] = [];
+
+    for (const mawb of recentLotMawbs) {
+      const found = lots.find((l) => l.mawbUUID === mawb);
+      if (found && !chipsLots.some((l) => l.mawbUUID === found.mawbUUID)) {
+        chipsLots.push(found);
+      }
+    }
+    for (const l of lots) {
+      if (chipsLots.length >= 4) break;
+      if (!chipsLots.some((item) => item.mawbUUID === l.mawbUUID)) {
+        chipsLots.push(l);
+      }
+    }
+
+    return chipsLots.map((l) => ({
+      id: l.mawbUUID,
+      label: l.refLotNo,
+      subLabel: l.code,
+      icon: l.shippingTypeCode?.toLowerCase() === "sea" ? "🚢" : "✈️",
+      badge: l.shippingTypeCode?.toUpperCase(),
+      active: selectedLot?.mawbUUID === l.mawbUUID,
+    }));
+  }, [lots, recentLotMawbs, selectedLot]);
 
   return (
     <TouchableWithoutFeedback onPress={focusTrackingInput} accessible={false}>
@@ -837,11 +950,41 @@ export default function ReceiveScreen() {
               : ""
           }
           loading={changeLotLoading}
+          canSwitchToOriginal={
+            !!findLotByCodeOrRef(lots, lotMismatchData?.originalLot)
+          }
+          onSwitchToOriginalLot={() => {
+            const match = findLotByCodeOrRef(lots, lotMismatchData?.originalLot);
+            if (match) handleSwitchDeviceLot(match);
+          }}
           onCancel={() => {
             setLotMismatchData(null);
             focusTrackingInput();
           }}
           onConfirm={() => void handleConfirmChangeLot()}
+        />
+
+        {/* Thumb-friendly Lot Picker Modal */}
+        <ThumbSelectionModal
+          visible={showLotModal}
+          title="เลือก Lot No."
+          subtitle="แตะเลือก Lot สำหรับรับเข้าพัสดุ"
+          items={modalLotItems}
+          searchPlaceholder="ค้นหา Ref Lot, Code หรือบริษัท..."
+          searchValue={lotSearch}
+          onSearchChange={setLotSearch}
+          tabs={lotFilterTabs}
+          activeTab={lotFilterTab}
+          onTabChange={setLotFilterTab}
+          onSelectItem={(item) => {
+            const target = lots.find((l) => l.mawbUUID === item.id);
+            if (target) handleSelectLot(target);
+          }}
+          onClose={() => {
+            setShowLotModal(false);
+            focusTrackingInput();
+          }}
+          loading={loadingLots}
         />
 
         {isScannerTestMode && (
@@ -891,131 +1034,76 @@ export default function ReceiveScreen() {
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
-            {/* 1. Lot No. Selection */}
+            {/* 1. Lot No. Selection with Thumb Ergonomics & Quick Chips */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>1. เลือก Lot No.*</Text>
-              <View>
-                <View style={styles.customerHeaderRow}>
-                  <TouchableOpacity
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionTitle}>1. เลือก Lot No.*</Text>
+                {selectedLot && (
+                  <View
                     style={[
-                      styles.selectButton,
-                      showLotDropdown && styles.selectButtonActive,
-                      { flex: 1, marginRight: 8 },
+                      styles.selectedLotBadge,
+                      selectedLot.shippingTypeCode?.toLowerCase() === "sea"
+                        ? styles.selectedLotBadgeSea
+                        : styles.selectedLotBadgeAir,
                     ]}
-                    onPress={() => setShowLotDropdown(!showLotDropdown)}
-                    disabled={loadingLots}
                   >
-                    <View style={styles.selectButtonContent}>
-                      <Text style={styles.selectButtonLabel}>
-                        {(() => {
-                          if (loadingLots) return "กำลังโหลดข้อมูล Lot No...";
-                          if (selectedLot)
-                            return `${selectedLot.refLotNo} | ${selectedLot.createdAt.slice(0, 10)}`;
-                          return "กดเพื่อเลือก Lot No.";
-                        })()}
-                      </Text>
-                      {selectedLot && (
-                        <Text style={styles.selectButtonDescription}>
-                          Code: {selectedLot.code} |{" "}
-                          {selectedLot.shippingTypeCode?.toUpperCase()} |{" "}
-                          {selectedLot.company}
-                        </Text>
-                      )}
-                    </View>
-                    <Text
-                      style={[
-                        styles.selectButtonIcon,
-                        showLotDropdown && styles.selectButtonIconActive,
-                      ]}
-                    >
-                      {showLotDropdown ? "▲" : "▼"}
+                    <Text style={styles.selectedLotBadgeText}>
+                      {selectedLot.shippingTypeCode?.toLowerCase() === "sea"
+                        ? "🚢 SEA"
+                        : "✈️ AIR"}
                     </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.reloadButton}
-                    onPress={() => void loadLots()}
-                    disabled={loadingLots}
-                  >
-                    <Text style={styles.reloadButtonText}>🔄</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {showLotDropdown && (
-                  <View style={styles.dropdown}>
-                    <View style={styles.searchContainer}>
-                      <Text style={styles.searchIcon}>🔍</Text>
-                      <TextInput
-                        value={lotSearch}
-                        onChangeText={setLotSearch}
-                        placeholder="ค้นหาด้วย Ref Lot No. หรือ Code..."
-                        style={styles.searchInput}
-                        placeholderTextColor="#9CA3AF"
-                        autoFocus={true}
-                      />
-                      {lotSearch.length > 0 && (
-                        <TouchableOpacity
-                          onPress={() => setLotSearch("")}
-                          style={styles.searchClear}
-                        >
-                          <Text style={styles.searchClearText}>✕</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-
-                    <View style={styles.dropdownHeader}>
-                      <Text style={styles.dropdownHeaderText}>
-                        {lotSearch.length > 0
-                          ? `พบ ${filteredLots.length} รายการ`
-                          : `ทั้งหมด ${lots.length} รายการ`}
-                      </Text>
-                    </View>
-
-                    <ScrollView style={styles.dropdownList} nestedScrollEnabled>
-                      {filteredLots.length === 0 ? (
-                        <View style={styles.emptySearch}>
-                          <Text style={styles.emptySearchIcon}>🔍</Text>
-                          <Text style={styles.emptySearchText}>
-                            ไม่พบข้อมูล Lot No.
-                          </Text>
-                          <Text style={styles.emptySearchHint}>
-                            ลองค้นหาด้วยคำอื่น หรือกดปุ่ม 🔄 เพื่อโหลดใหม่
-                          </Text>
-                        </View>
-                      ) : (
-                        filteredLots.map((item) => {
-                          const isSelected =
-                            selectedLot?.mawbUUID === item.mawbUUID;
-                          return (
-                            <TouchableOpacity
-                              key={item.mawbUUID}
-                              style={[
-                                styles.dropdownItem,
-                                isSelected && styles.dropdownItemActive,
-                              ]}
-                              onPress={() => handleSelectLot(item)}
-                            >
-                              <View style={styles.dropdownItemContent}>
-                                <Text style={styles.dropdownItemTitle}>
-                                  {item.refLotNo}
-                                </Text>
-                                <Text style={styles.dropdownItemDescription}>
-                                  {item.code} |{" "}
-                                  {item.shippingTypeCode?.toUpperCase()} |{" "}
-                                  {item.createdAt}
-                                </Text>
-                              </View>
-                              {isSelected && (
-                                <Text style={styles.dropdownItemCheck}>✓</Text>
-                              )}
-                            </TouchableOpacity>
-                          );
-                        })
-                      )}
-                    </ScrollView>
                   </View>
                 )}
               </View>
+
+              <View style={styles.customerHeaderRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.selectButton,
+                    showLotModal && styles.selectButtonActive,
+                    { flex: 1, marginRight: 8 },
+                  ]}
+                  onPress={() => setShowLotModal(true)}
+                  disabled={loadingLots}
+                  activeOpacity={0.8}
+                >
+                  <View style={styles.selectButtonContent}>
+                    <Text style={styles.selectButtonLabel}>
+                      {(() => {
+                        if (loadingLots) return "กำลังโหลดข้อมูล Lot No...";
+                        if (selectedLot)
+                          return `${selectedLot.refLotNo} | ${selectedLot.createdAt.slice(0, 10)}`;
+                        return "กดเพื่อเลือก Lot No.";
+                      })()}
+                    </Text>
+                    {selectedLot && (
+                      <Text style={styles.selectButtonDescription}>
+                        Code: {selectedLot.code} | {selectedLot.company}
+                      </Text>
+                    )}
+                  </View>
+                  <Text style={styles.selectButtonIcon}>▼</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.reloadButton}
+                  onPress={() => void loadLots()}
+                  disabled={loadingLots}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.reloadButtonText}>🔄</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Quick Switch Chips (Thumb Reach Zone) */}
+              <QuickChips
+                title="⚡ สลับ Lot ด่วน (1-Tap):"
+                items={quickLotChips}
+                onSelect={(chip) => {
+                  const target = lots.find((l) => l.mawbUUID === chip.id);
+                  if (target) handleSelectLot(target);
+                }}
+              />
             </View>
 
             {/* QoL Hero Banner - Large Glanceable Scan Feedback */}
@@ -1362,11 +1450,33 @@ const styles = StyleSheet.create({
   section: {
     marginBottom: 20,
   },
+  sectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
   sectionTitle: {
     fontSize: 17,
     fontWeight: "600",
     color: "#1F2937",
-    marginBottom: 10,
+    marginBottom: 0,
+  },
+  selectedLotBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  selectedLotBadgeAir: {
+    backgroundColor: "#DBEAFE",
+  },
+  selectedLotBadgeSea: {
+    backgroundColor: "#D1FAE5",
+  },
+  selectedLotBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#1E40AF",
   },
   customerHeaderRow: {
     flexDirection: "row",

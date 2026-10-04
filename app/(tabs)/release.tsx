@@ -1,7 +1,8 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Audio as ExpoAudio } from "expo-av";
 import { useFocusEffect, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AppState,
   Alert,
@@ -27,6 +28,12 @@ import {
   GlanceableHeroBannerProps,
 } from "../components/GlanceableHeroBanner";
 import { TrackingCodeText } from "../components/TrackingCodeText";
+import { QuickChips, QuickChipItem } from "../components/QuickChips";
+import {
+  ThumbSelectionModal,
+  ThumbModalItem,
+} from "../components/ThumbSelectionModal";
+import { updateRecentIds } from "../../utils/recentSelections";
 import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
 import api from "../../utils/api";
 import { getScannerTestOutcome, isScannerTestMode } from "../../utils/scannerTestMode";
@@ -95,12 +102,9 @@ export default function ReleaseScreen() {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loadingCustomers, setLoadingCustomers] = useState(false);
-
-  // Dropdown states
-  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
-
-  // Search states
+  const [showCustomerModal, setShowCustomerModal] = useState(false);
   const [customerSearch, setCustomerSearch] = useState("");
+  const [recentCustomerUuids, setRecentCustomerUuids] = useState<string[]>([]);
 
   // QoL States (Keyboard suppression & Hero Banner)
   const [showSoftKeyboard, setShowSoftKeyboard] = useState(false);
@@ -200,12 +204,12 @@ export default function ReleaseScreen() {
     }
   }, []);
 
-  // Auto-focus tracking input when customer is selected and dropdown is closed
+  // Auto-focus tracking input when customer is selected and modal is closed
   useEffect(() => {
-    if (customer && !showCustomerDropdown && inputRef.current) {
+    if (customer && !showCustomerModal && inputRef.current) {
       focusTrackingInput();
     }
-  }, [customer, focusTrackingInput, showCustomerDropdown]);
+  }, [customer, focusTrackingInput, showCustomerModal]);
 
   const showScanError = useCallback((kind: ScanErrorKind) => {
     clearAutoSubmitTimer();
@@ -249,8 +253,35 @@ export default function ReleaseScreen() {
     [playBeepPattern],
   );
 
-  const loadCustomers = async () => {
-    if (isScannerTestMode) return;
+  const handleSelectCustomer = useCallback(
+    (item: Customer) => {
+      setCustomer(item);
+      setShowCustomerModal(false);
+      void AsyncStorage.setItem("@selected_customer_uuid", item.uuid);
+      setRecentCustomerUuids((prev) => {
+        const next = updateRecentIds(prev, item.uuid, 4);
+        void AsyncStorage.setItem("@recent_customers", JSON.stringify(next));
+        return next;
+      });
+      triggerSuccessHaptic();
+      setHeroBanner({
+        statusType: "idle",
+        title: `เลือกลูกค้า: ${item.code}`,
+        subtitle: `${item.name} • พร้อมยิงปล่อยออก`,
+        badgeLabel: item.code,
+        badgeType: "default",
+      });
+      focusTrackingInput();
+    },
+    [focusTrackingInput],
+  );
+
+  const loadCustomers = useCallback(async () => {
+    if (isScannerTestMode) {
+      setCustomer(TEST_CUSTOMER);
+      setRecentCustomerUuids([TEST_CUSTOMER.uuid]);
+      return;
+    }
 
     setLoadingCustomers(true);
     try {
@@ -269,33 +300,55 @@ export default function ReleaseScreen() {
         },
       });
 
-      console.log("=== Load Customers Response ===");
-      console.log("Endpoint:", endpoint);
-      console.log("Response:", response.data);
+      if (
+        response.data &&
+        response.data.code === 200 &&
+        Array.isArray(response.data.data)
+      ) {
+        const fetchedCustomers = response.data.data;
+        setCustomers(fetchedCustomers);
 
-      if (response.data && response.data.code === 200) {
-        setCustomers(response.data.data);
+        // Restore saved selected customer
+        const savedCustomerUuid = await AsyncStorage.getItem(
+          "@selected_customer_uuid",
+        );
+        if (savedCustomerUuid) {
+          const matched = fetchedCustomers.find(
+            (c) => c.uuid === savedCustomerUuid,
+          );
+          if (matched) setCustomer(matched);
+        }
+
+        // Restore recent customer uuids
+        const savedRecents = await AsyncStorage.getItem("@recent_customers");
+        if (savedRecents) {
+          try {
+            setRecentCustomerUuids(JSON.parse(savedRecents));
+          } catch (e) {
+            console.error("Error parsing recent customers:", e);
+          }
+        }
       } else {
-        console.error("Failed to load customers:", response.data.message);
+        console.error("Failed to load customers:", response.data?.message);
       }
     } catch (error) {
       console.error("Error loading customers:", error);
     } finally {
       setLoadingCustomers(false);
     }
-  };
+  }, [ensureAuthenticated]);
 
   useEffect(() => {
-    loadCustomers();
-  }, []);
+    void loadCustomers();
+  }, [loadCustomers]);
 
   useFocusEffect(
     useCallback(() => {
       if (!isScannerTestMode) {
         void ensureAuthenticated();
-        loadCustomers();
+        void loadCustomers();
       }
-    }, [ensureAuthenticated]),
+    }, [ensureAuthenticated, loadCustomers]),
   );
 
   useEffect(() => {
@@ -605,19 +658,82 @@ export default function ReleaseScreen() {
     void handleDetected(trackingNumber, autoEnter ? "auto" : "manual");
   };
 
-  // Filter customers
-  const filteredCustomers = customers.filter(
-    (item) =>
-      item.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
-      item.code.toLowerCase().includes(customerSearch.toLowerCase()) ||
-      item.email.toLowerCase().includes(customerSearch.toLowerCase()),
-  );
+  const filteredCustomers = useMemo(() => {
+    if (!customerSearch.trim()) return customers;
+    const q = customerSearch.toLowerCase();
+    return customers.filter(
+      (item) =>
+        item.name.toLowerCase().includes(q) ||
+        item.code.toLowerCase().includes(q) ||
+        item.email.toLowerCase().includes(q) ||
+        item.tel.includes(q),
+    );
+  }, [customers, customerSearch]);
+
+  const modalCustomerItems: ThumbModalItem[] = useMemo(() => {
+    return filteredCustomers.map((item) => ({
+      id: item.uuid,
+      title: `${item.code} - ${item.name}`,
+      subtitle: `📧 ${item.email || "-"} | 📞 ${item.tel || "-"} | 📦 ${item.totalOrder || 0} orders`,
+      badge: {
+        text: `${item.totalOrder || 0} PKGS`,
+        variant: "blue",
+      },
+      selected: customer?.uuid === item.uuid,
+    }));
+  }, [customer, filteredCustomers]);
+
+  const quickCustomerChips: QuickChipItem[] = useMemo(() => {
+    if (customers.length === 0) return [];
+    const chips: Customer[] = [];
+
+    for (const uuid of recentCustomerUuids) {
+      const found = customers.find((c) => c.uuid === uuid);
+      if (found && !chips.some((c) => c.uuid === found.uuid)) {
+        chips.push(found);
+      }
+    }
+    for (const c of customers) {
+      if (chips.length >= 4) break;
+      if (!chips.some((item) => item.uuid === c.uuid)) {
+        chips.push(c);
+      }
+    }
+
+    return chips.map((c) => ({
+      id: c.uuid,
+      label: c.code,
+      subLabel: c.name,
+      icon: "👤",
+      badge: `${c.totalOrder || 0} pkgs`,
+      active: customer?.uuid === c.uuid,
+    }));
+  }, [customer, customers, recentCustomerUuids]);
 
   return (
     <TouchableWithoutFeedback onPress={focusTrackingInput} accessible={false}>
       <View style={[styles.container, { paddingTop: insets.top }]}>
-        <StatusBar style="light" />
         <ScanErrorModal kind={scanError} onConfirm={confirmScanError} />
+
+        {/* Thumb-friendly Customer Selection Modal */}
+        <ThumbSelectionModal
+          visible={showCustomerModal}
+          title="เลือกลูกค้า (Select Customer)"
+          subtitle="แตะเลือกลูกค้าสำหรับปล่อยพัสดุออก"
+          items={modalCustomerItems}
+          searchPlaceholder="ค้นหาด้วยชื่อ, รหัส, อีเมล หรือเบอร์..."
+          searchValue={customerSearch}
+          onSearchChange={setCustomerSearch}
+          onSelectItem={(item) => {
+            const target = customers.find((c) => c.uuid === item.id);
+            if (target) handleSelectCustomer(target);
+          }}
+          onClose={() => {
+            setShowCustomerModal(false);
+            focusTrackingInput();
+          }}
+          loading={loadingCustomers}
+        />
 
         {isScannerTestMode && (
           <View style={styles.testModeBanner}>
@@ -664,26 +780,26 @@ export default function ReleaseScreen() {
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
           >
-            {/* Customer Selection */}
-            {!isScannerTestMode && <View style={styles.section}>
-              <Text style={styles.sectionTitle}>1. เลือกลูกค้า</Text>
-              <View>
+            {/* Customer Selection with Thumb Ergonomics & Quick Chips */}
+            {!isScannerTestMode && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>1. เลือกลูกค้า*</Text>
                 <View style={styles.customerHeaderRow}>
                   <TouchableOpacity
                     style={[
                       styles.selectButton,
-                      showCustomerDropdown && styles.selectButtonActive,
+                      showCustomerModal && styles.selectButtonActive,
                       { flex: 1, marginRight: 8 },
                     ]}
-                    onPress={() => {
-                      setShowCustomerDropdown(!showCustomerDropdown);
-                    }}
+                    onPress={() => setShowCustomerModal(true)}
                     disabled={loadingCustomers}
+                    activeOpacity={0.8}
                   >
                     <View style={styles.selectButtonContent}>
                       <Text style={styles.selectButtonLabel}>
                         {(() => {
-                          if (loadingCustomers) return "กำลังโหลดข้อมูลลูกค้า...";
+                          if (loadingCustomers)
+                            return "กำลังโหลดข้อมูลลูกค้า...";
                           if (customer)
                             return `${customer.code} - ${customer.name}`;
                           return "กดเพื่อเลือกลูกค้า";
@@ -695,114 +811,30 @@ export default function ReleaseScreen() {
                         </Text>
                       )}
                     </View>
-                    <Text
-                      style={[
-                        styles.selectButtonIcon,
-                        showCustomerDropdown && styles.selectButtonIconActive,
-                      ]}
-                    >
-                      {showCustomerDropdown ? "▲" : "▼"}
-                    </Text>
+                    <Text style={styles.selectButtonIcon}>▼</Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
                     style={styles.reloadButton}
                     onPress={loadCustomers}
                     disabled={loadingCustomers}
+                    activeOpacity={0.7}
                   >
                     <Text style={styles.reloadButtonText}>🔄</Text>
                   </TouchableOpacity>
                 </View>
 
-                {showCustomerDropdown && (
-                  <View style={styles.dropdown}>
-                    <View style={styles.searchContainer}>
-                      <Text style={styles.searchIcon}>🔍</Text>
-                      <TextInput
-                        value={customerSearch}
-                        onChangeText={setCustomerSearch}
-                        placeholder="ค้นหาด้วยรหัส, ชื่อ หรืออีเมล..."
-                        style={styles.searchInput}
-                        placeholderTextColor="#9CA3AF"
-                        autoFocus={true}
-                      />
-                      {customerSearch.length > 0 && (
-                        <TouchableOpacity
-                          onPress={() => setCustomerSearch("")}
-                          style={styles.searchClear}
-                        >
-                          <Text style={styles.searchClearText}>✕</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-
-                    <View style={styles.dropdownHeader}>
-                      <Text style={styles.dropdownHeaderText}>
-                        {customerSearch.length > 0
-                          ? `พบ ${filteredCustomers.length} รายการ`
-                          : `ทั้งหมด ${customers.length} รายการ`}
-                      </Text>
-                      {customerSearch.length > 0 &&
-                        filteredCustomers.length > 10 && (
-                          <Text style={styles.dropdownHeaderHint}>
-                            แสดง 10 รายการแรก
-                          </Text>
-                        )}
-                    </View>
-
-                    <ScrollView style={styles.dropdownList} nestedScrollEnabled>
-                      {filteredCustomers.length === 0 ? (
-                        <View style={styles.emptySearch}>
-                          <Text style={styles.emptySearchIcon}>🔍</Text>
-                          <Text style={styles.emptySearchText}>
-                            ไม่พบข้อมูลลูกค้า
-                          </Text>
-                          <Text style={styles.emptySearchHint}>
-                            ลองค้นหาด้วยรหัสลูกค้า ชื่อ หรืออีเมล
-                          </Text>
-                        </View>
-                      ) : (
-                        filteredCustomers.slice(0, 10).map((item, index) => (
-                          <TouchableOpacity
-                            key={`customer-${item.uuid}-${index}`}
-                            style={[
-                              styles.dropdownItem,
-                              customer?.uuid === item.uuid &&
-                                styles.dropdownItemActive,
-                            ]}
-                            onPress={() => {
-                              setCustomer(item);
-                              setShowCustomerDropdown(false);
-                              setCustomerSearch("");
-                              setHeroBanner({
-                                statusType: "idle",
-                                title: `เลือกลูกค้า: ${item.code}`,
-                                subtitle: `${item.name} • พร้อมยิงปล่อยออก`,
-                                badgeLabel: item.code,
-                                badgeType: "default",
-                              });
-                            }}
-                          >
-                            <View style={styles.dropdownItemContent}>
-                              <Text style={styles.dropdownItemTitle}>
-                                {item.code} - {item.name}
-                              </Text>
-                              <Text style={styles.dropdownItemDescription}>
-                                📧 {item.email} | 📞 {item.tel} | 📦{" "}
-                                {item.totalOrder} orders
-                              </Text>
-                            </View>
-                            {customer?.uuid === item.uuid && (
-                              <Text style={styles.dropdownItemCheck}>✓</Text>
-                            )}
-                          </TouchableOpacity>
-                        ))
-                      )}
-                    </ScrollView>
-                  </View>
-                )}
+                {/* Quick Customer Chips (Thumb Reach Zone) */}
+                <QuickChips
+                  title="⚡ สลับลูกค้าด่วน (1-Tap):"
+                  items={quickCustomerChips}
+                  onSelect={(chip) => {
+                    const target = customers.find((c) => c.uuid === chip.id);
+                    if (target) handleSelectCustomer(target);
+                  }}
+                />
               </View>
-            </View>}
+            )}
 
             {/* QoL Hero Banner - Large Glanceable Scan Feedback */}
             {heroBanner && (
