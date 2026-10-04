@@ -1,38 +1,42 @@
-import { useRouter } from "expo-router";
-import { useEffect } from "react";
+import { Redirect, useRootNavigationState } from "expo-router";
+import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { getValidAccessToken } from "../utils/auth";
 import { isScannerTestMode } from "../utils/scannerTestMode";
 
 export default function Index() {
-  const router = useRouter();
+  const rootNavigationState = useRootNavigationState();
+  const [destination, setDestination] = useState<string | null>(null);
 
   useEffect(() => {
-    checkAuthStatus();
+    let isMounted = true;
+    const checkAuthStatus = async () => {
+      try {
+        if (isScannerTestMode) {
+          if (isMounted) setDestination("/(tabs)/receive");
+          return;
+        }
+
+        const token = await getValidAccessToken();
+        if (isMounted) {
+          setDestination(token ? "/(tabs)/receive" : "/login");
+        }
+      } catch (error) {
+        console.error("Check auth error:", error);
+        if (isMounted) setDestination("/login");
+      }
+    };
+
+    void checkAuthStatus();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  const checkAuthStatus = async () => {
-    try {
-      if (isScannerTestMode) {
-        router.replace("/(tabs)/receive");
-        return;
-      }
-
-      // รอให้ Root Layout mount เสร็จก่อน
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      const token = await getValidAccessToken();
-      if (token) {
-        router.replace("/(tabs)/receive");
-      } else {
-        router.replace("/login");
-      }
-    } catch (error) {
-      console.error("Check auth error:", error);
-      // ถ้าเกิด error ให้ไปหน้า login
-      router.replace("/login");
-    }
-  };
+  if (destination && rootNavigationState?.key) {
+    return <Redirect href={destination as any} />;
+  }
 
   return (
     <View style={styles.container}>
