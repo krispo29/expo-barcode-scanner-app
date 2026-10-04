@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Audio as ExpoAudio } from "expo-av";
 import { useFocusEffect, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -22,15 +23,31 @@ import {
   ScanErrorKind,
   ScanErrorModal,
 } from "../components/ScanErrorModal";
+import {
+  ChangeLotModal,
+  extractOriginalLot,
+  isLotMismatchError,
+} from "../components/ChangeLotModal";
 import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
 import api from "../../utils/api";
-import { getScannerTestOutcome, isScannerTestMode } from "../../utils/scannerTestMode";
+import {
+  getScannerTestOutcome,
+  isScannerTestMode,
+  LotNo,
+  TEST_LOTS,
+} from "../../utils/scannerTestMode";
 
 type ScanRecord = {
   id: string;
   code: string;
   scannedAt: string;
   mode: "auto" | "manual";
+  status?: "success" | "lot_mismatch";
+  shippingType?: string;
+  originalLot?: string;
+  targetLot?: string;
+  customerCode?: string;
+  productName?: string;
 };
 
 type ApiResponse<T = any> = {
@@ -57,8 +74,23 @@ export default function ReceiveScreen() {
     return token;
   }, [router]);
 
+  // Lot Selection states
+  const [selectedLot, setSelectedLot] = useState<LotNo | null>(null);
+  const [lots, setLots] = useState<LotNo[]>([]);
+  const [loadingLots, setLoadingLots] = useState(false);
+  const [showLotDropdown, setShowLotDropdown] = useState(false);
+  const [lotSearch, setLotSearch] = useState("");
+
+  // Change Lot Modal states
+  const [lotMismatchData, setLotMismatchData] = useState<{
+    trackingNo: string;
+    originalLot: string;
+    newLot: LotNo;
+  } | null>(null);
+  const [changeLotLoading, setChangeLotLoading] = useState(false);
+
   // Check if ready to scan
-  const canScan = true;
+  const canScan = selectedLot !== null;
 
   const [autoEnter, setAutoEnter] = useState(true);
   const [input, setInput] = useState("");
@@ -95,7 +127,7 @@ export default function ReceiveScreen() {
       }
     }
 
-    loadSounds();
+    void loadSounds();
 
     return () => {
       soundAir?.unloadAsync();
@@ -120,12 +152,16 @@ export default function ReceiveScreen() {
     }
   }, []);
 
-  // โฟกัสช่อง Tracking Number อัตโนมัติเมื่อเข้า screen
-  useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.focus();
-    }
+  const focusTrackingInput = useCallback(() => {
+    setTimeout(() => inputRef.current?.focus(), 150);
   }, []);
+
+  // โฟกัสช่อง Tracking Number อัตโนมัติเมื่อเลือก Lot แล้ว และ dropdown ปิด
+  useEffect(() => {
+    if (selectedLot && !showLotDropdown && inputRef.current) {
+      focusTrackingInput();
+    }
+  }, [focusTrackingInput, selectedLot, showLotDropdown]);
 
   // เคลียร์ timer ตอน unmount
   useEffect(() => {
@@ -138,10 +174,61 @@ export default function ReceiveScreen() {
     if (!isScannerTestMode) void ensureAuthenticated();
   }, [ensureAuthenticated]);
 
+  const loadLots = useCallback(async () => {
+    if (isScannerTestMode) {
+      setLots(TEST_LOTS);
+      setSelectedLot((prev) => prev || TEST_LOTS[0]);
+      return;
+    }
+
+    setLoadingLots(true);
+    try {
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+      const endpoint = `${apiUrl}/v1/lot_nos/all`;
+
+      const token = await ensureAuthenticated();
+      if (!token) return;
+
+      const response = await api.get<ApiResponse<LotNo[]>>(endpoint, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (
+        response.data &&
+        response.data.code === 200 &&
+        Array.isArray(response.data.data)
+      ) {
+        const fetchedLots = response.data.data;
+        setLots(fetchedLots);
+
+        // ดึง Lot ที่เลือกไว้ล่าสุดจาก storage
+        const savedMawbUUID = await AsyncStorage.getItem("@selected_lot_mawb");
+        if (savedMawbUUID) {
+          const match = fetchedLots.find((l) => l.mawbUUID === savedMawbUUID);
+          if (match) setSelectedLot(match);
+        }
+      }
+    } catch (error) {
+      console.error("Error loading lot nos:", error);
+    } finally {
+      setLoadingLots(false);
+    }
+  }, [ensureAuthenticated]);
+
+  useEffect(() => {
+    void loadLots();
+  }, [loadLots]);
+
   useFocusEffect(
     useCallback(() => {
-      if (!isScannerTestMode) void ensureAuthenticated();
-    }, [ensureAuthenticated]),
+      if (!isScannerTestMode) {
+        void ensureAuthenticated();
+        void loadLots();
+      }
+    }, [ensureAuthenticated, loadLots]),
   );
 
   useEffect(() => {
@@ -155,6 +242,16 @@ export default function ReceiveScreen() {
       subscription.remove();
     };
   }, [ensureAuthenticated]);
+
+  const handleSelectLot = useCallback(
+    (lot: LotNo) => {
+      setSelectedLot(lot);
+      setShowLotDropdown(false);
+      void AsyncStorage.setItem("@selected_lot_mawb", lot.mawbUUID);
+      focusTrackingInput();
+    },
+    [focusTrackingInput],
+  );
 
   const handleLogout = async () => {
     // Safety: Prevent logout if a scan just happened (within 1000ms)
@@ -180,10 +277,7 @@ export default function ReceiveScreen() {
         onPress: () => {
           void (async () => {
             try {
-              // ลบข้อมูลการเข้าสู่ระบบ
               await clearStoredAuth();
-
-              // กลับไปหน้า login
               router.replace("/login");
             } catch (error) {
               console.error("Logout error:", error);
@@ -199,17 +293,16 @@ export default function ReceiveScreen() {
     return value.trim().replaceAll(/[^a-zA-Z0-9]/g, "");
   };
 
-  const focusTrackingInput = useCallback(() => {
-    setTimeout(() => inputRef.current?.focus(), 100);
-  }, []);
-
-  const showScanError = useCallback((kind: ScanErrorKind) => {
-    clearAutoSubmitTimer();
-    latestInputRef.current = "";
-    setInput("");
-    inputRef.current?.blur();
-    setScanError(kind);
-  }, [clearAutoSubmitTimer]);
+  const showScanError = useCallback(
+    (kind: ScanErrorKind) => {
+      clearAutoSubmitTimer();
+      latestInputRef.current = "";
+      setInput("");
+      inputRef.current?.blur();
+      setScanError(kind);
+    },
+    [clearAutoSubmitTimer],
+  );
 
   const confirmScanError = useCallback(() => {
     setScanError(null);
@@ -249,6 +342,11 @@ export default function ReceiveScreen() {
     async (rawValue: string, mode: "auto" | "manual") => {
       clearAutoSubmitTimer();
 
+      if (!selectedLot) {
+        Alert.alert("แจ้งเตือน", "กรุณาเลือก Lot No. ก่อนเริ่มสแกน");
+        return;
+      }
+
       const normalized = normalizeTracking(rawValue);
       if (!normalized) {
         setLastStatus("ไม่พบ Tracking No.");
@@ -271,9 +369,50 @@ export default function ReceiveScreen() {
       lastScanRef.current = { value: normalized, timestamp: Date.now() };
       let modalOpened = false;
 
+      const triggerLotMismatch = (trackingNo: string, errorMsg: string) => {
+        const originalLot = extractOriginalLot(errorMsg);
+        modalOpened = true;
+        void playErrorSound("generic");
+
+        idCounter.current += 1;
+        const record: ScanRecord = {
+          id: `${Date.now()}-${idCounter.current}`,
+          code: trackingNo,
+          scannedAt: new Date().toISOString(),
+          mode,
+          status: "lot_mismatch",
+          originalLot,
+          targetLot: selectedLot.refLotNo,
+        };
+        setHistory((prev) =>
+          [record, ...prev.filter((r) => r.code !== trackingNo)].slice(0, 30),
+        );
+        setLastStatus(
+          `${trackingNo} • Lot ไม่ตรง (${originalLot || "ไม่ระบุ"})`,
+        );
+
+        latestInputRef.current = "";
+        setInput("");
+        inputRef.current?.blur();
+
+        setLotMismatchData({
+          trackingNo,
+          originalLot,
+          newLot: selectedLot,
+        });
+      };
+
       try {
         if (isScannerTestMode) {
           const outcome = getScannerTestOutcome(normalized);
+          if (outcome === "lot_mismatch") {
+            triggerLotMismatch(
+              normalized,
+              "LOT_NO_NOT_MATCH:TEST-LOT-RECEIVE-001",
+            );
+            return;
+          }
+
           if (outcome !== "success") {
             const errorKind = outcome === "invalid" ? "generic" : "system";
             setLastStatus(`${normalized} • ${getScanErrorMessage(errorKind)}`);
@@ -283,43 +422,46 @@ export default function ReceiveScreen() {
             return;
           }
 
-          const shippingType = "air";
+          const shippingType =
+            selectedLot.shippingTypeCode?.toLowerCase() || "air";
           idCounter.current += 1;
           const record: ScanRecord = {
             id: `${Date.now()}-${idCounter.current}`,
             code: normalized,
             scannedAt: new Date().toISOString(),
             mode,
+            status: "success",
+            shippingType,
+            targetLot: selectedLot.refLotNo,
           };
           scannedCodesRef.current.add(normalized);
           setHistory((prev) => [record, ...prev].slice(0, 30));
           setLastStatus(`${normalized} • ${shippingType.toUpperCase()}`);
           latestInputRef.current = "";
           setInput("");
-          if (soundAir) await soundAir.replayAsync();
+          if (shippingType === "sea" && soundSea) {
+            await soundSea.replayAsync();
+          } else if (soundAir) {
+            await soundAir.replayAsync();
+          }
           return;
         }
 
         try {
           Vibration.vibrate(Platform.OS === "android" ? 30 : 200);
         } catch {
-          // บางเครื่องอาจไม่รองรับการสั่น
+          // ignore
         }
 
-        // เรียก API เพื่อตรวจสอบ tracking number
         console.log("=== Scan Request ===");
         console.log("Tracking No:", normalized);
+        console.log("MawbUUID:", selectedLot.mawbUUID);
 
         const apiUrl = process.env.EXPO_PUBLIC_API_URL;
-        const endpoint = `${apiUrl}/v1/orders/received_inbound/${normalized}?device=mobile`;
+        const endpoint = `${apiUrl}/v1/orders/received_inbound/${normalized}?mawbUUID=${selectedLot.mawbUUID}&device=mobile`;
 
-        // ดึง access token จาก storage
         const token = await ensureAuthenticated();
-        if (!token) {
-          return;
-        }
-
-        console.log("Endpoint:", endpoint);
+        if (!token) return;
 
         const response = await api.get<ApiResponse>(endpoint, {
           headers: {
@@ -328,13 +470,13 @@ export default function ReceiveScreen() {
           },
         });
 
-        console.log("=== Scan Response ===");
-        console.log("Response:", response.data);
+        console.log("=== Scan Response ===", response.data);
 
         if (response.data && response.data.code === 200) {
-          // สแกนสำเร็จ - เล่นเสียงตาม shippingTypeCode
           const shippingType =
-            response.data.data?.shippingTypeCode?.toLowerCase() || "air";
+            response.data.data?.shippingTypeCode?.toLowerCase() ||
+            selectedLot.shippingTypeCode?.toLowerCase() ||
+            "air";
 
           idCounter.current += 1;
           const record: ScanRecord = {
@@ -342,15 +484,20 @@ export default function ReceiveScreen() {
             code: normalized,
             scannedAt: new Date().toISOString(),
             mode,
+            status: "success",
+            shippingType,
+            targetLot: selectedLot.refLotNo,
+            customerCode: response.data.data?.customerCode,
+            productName:
+              response.data.data?.productName || response.data.data?.product,
           };
 
           scannedCodesRef.current.add(normalized);
           setHistory((prev) => [record, ...prev].slice(0, 30));
           setLastStatus(`${normalized} • ${shippingType.toUpperCase()}`);
           latestInputRef.current = "";
-          setInput(""); // เคลียร์ค่าเก่าหลังสแกนสำเร็จ
+          setInput("");
 
-          // เล่นเสียงตาม shippingTypeCode (air หรือ sea)
           try {
             if (shippingType === "sea" && soundSea) {
               await soundSea.replayAsync();
@@ -361,7 +508,12 @@ export default function ReceiveScreen() {
             console.log("Error playing sound", err);
           }
         } else {
-          // สแกนไม่พบข้อมูล - เล่นเสียง beep
+          const responseMsg = response.data?.message;
+          if (isLotMismatchError(responseMsg)) {
+            triggerLotMismatch(normalized, responseMsg!);
+            return;
+          }
+
           const errorKind = classifyScanError(
             response.data?.message,
             response.data?.code,
@@ -373,6 +525,14 @@ export default function ReceiveScreen() {
         }
       } catch (error: any) {
         console.error("Scan error:", error);
+        const responseMsg =
+          error?.response?.data?.message || error?.message || "";
+
+        if (isLotMismatchError(responseMsg)) {
+          triggerLotMismatch(normalized, responseMsg);
+          return;
+        }
+
         let errorMessage = "เกิดข้อผิดพลาดในการตรวจสอบ Tracking Number";
         const errorCode = error?.response?.data?.code;
         if (error?.response?.data?.message) {
@@ -399,16 +559,109 @@ export default function ReceiveScreen() {
     },
     [
       clearAutoSubmitTimer,
+      ensureAuthenticated,
       focusTrackingInput,
       playErrorSound,
+      selectedLot,
       showScanError,
+      soundAir,
+      soundSea,
     ],
   );
+
+  const handleConfirmChangeLot = useCallback(async () => {
+    if (!lotMismatchData) return;
+    const { trackingNo, newLot } = lotMismatchData;
+    setChangeLotLoading(true);
+
+    try {
+      if (isScannerTestMode) {
+        setLotMismatchData(null);
+        scannedCodesRef.current.add(trackingNo);
+        setHistory((prev) =>
+          prev.map((item) =>
+            item.code === trackingNo
+              ? { ...item, status: "success", targetLot: newLot.refLotNo }
+              : item,
+          ),
+        );
+        setLastStatus(
+          `${trackingNo} • เปลี่ยน Lot สำเร็จ (${newLot.refLotNo})`,
+        );
+        if (soundAir) await soundAir.replayAsync();
+        focusTrackingInput();
+        return;
+      }
+
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+      const shippingType = newLot.shippingTypeCode?.toLowerCase() || "air";
+      const endpoint = `${apiUrl}/v1/orders/received_inbound/${trackingNo}?newMawbUUID=${newLot.mawbUUID}&shippingType=${shippingType}&device=mobile`;
+
+      const token = await ensureAuthenticated();
+      if (!token) return;
+
+      const response = await api.get<ApiResponse>(endpoint, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (response.data && response.data.code === 200) {
+        setLotMismatchData(null);
+        scannedCodesRef.current.add(trackingNo);
+        setHistory((prev) =>
+          prev.map((item) =>
+            item.code === trackingNo
+              ? {
+                  ...item,
+                  status: "success",
+                  targetLot: newLot.refLotNo,
+                  shippingType,
+                }
+              : item,
+          ),
+        );
+        setLastStatus(
+          `${trackingNo} • เปลี่ยน Lot สำเร็จ (${newLot.refLotNo})`,
+        );
+        if (shippingType === "sea" && soundSea) {
+          await soundSea.replayAsync();
+        } else if (soundAir) {
+          await soundAir.replayAsync();
+        }
+        focusTrackingInput();
+      } else {
+        Alert.alert(
+          "เกิดข้อผิดพลาด",
+          response.data?.message || "ไม่สามารถเปลี่ยน Lot ได้",
+        );
+      }
+    } catch (err: any) {
+      console.error("Change lot error:", err);
+      const msg =
+        err?.response?.data?.message || "เกิดข้อผิดพลาดในการเปลี่ยน Lot";
+      Alert.alert("เกิดข้อผิดพลาด", msg);
+    } finally {
+      setChangeLotLoading(false);
+    }
+  }, [
+    ensureAuthenticated,
+    focusTrackingInput,
+    lotMismatchData,
+    soundAir,
+    soundSea,
+  ]);
 
   // ใช้กับสแกนเนอร์ฮาร์ดแวร์ (RS51 ยิงแล้วส่งตัวอักษร + Enter เข้ามา)
   const handleInputChange = useCallback(
     (text: string) => {
-      if (scanInFlightRef.current || scanError !== null) return;
+      if (
+        scanInFlightRef.current ||
+        scanError !== null ||
+        lotMismatchData !== null
+      )
+        return;
 
       const sanitized = text.replaceAll(/[\r\n]/g, "");
       const hasSubmitChar = /[\r\n]/.test(text);
@@ -429,7 +682,13 @@ export default function ReceiveScreen() {
         }
       }, SCANNER_AUTO_SUBMIT_DELAY_MS);
     },
-    [autoEnter, clearAutoSubmitTimer, handleDetected, scanError],
+    [
+      autoEnter,
+      clearAutoSubmitTimer,
+      handleDetected,
+      lotMismatchData,
+      scanError,
+    ],
   );
 
   const handleManualSubmit = () => {
@@ -439,14 +698,40 @@ export default function ReceiveScreen() {
     void handleDetected(trackingNumber, autoEnter ? "auto" : "manual");
   };
 
+  const filteredLots = lots.filter(
+    (item) =>
+      item.refLotNo.toLowerCase().includes(lotSearch.toLowerCase()) ||
+      item.code.toLowerCase().includes(lotSearch.toLowerCase()) ||
+      (item.company &&
+        item.company.toLowerCase().includes(lotSearch.toLowerCase())),
+  );
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar style="light" />
       <ScanErrorModal kind={scanError} onConfirm={confirmScanError} />
+      <ChangeLotModal
+        visible={lotMismatchData !== null}
+        trackingNo={lotMismatchData?.trackingNo || ""}
+        originalLot={lotMismatchData?.originalLot || ""}
+        newLotLabel={
+          lotMismatchData
+            ? `${lotMismatchData.newLot.refLotNo} | ${lotMismatchData.newLot.createdAt.slice(0, 10)}`
+            : ""
+        }
+        loading={changeLotLoading}
+        onCancel={() => {
+          setLotMismatchData(null);
+          focusTrackingInput();
+        }}
+        onConfirm={() => void handleConfirmChangeLot()}
+      />
 
       {isScannerTestMode && (
         <View style={styles.testModeBanner}>
-          <Text style={styles.testModeBannerText}>โหมดทดสอบ — ไม่มีการบันทึกข้อมูล</Text>
+          <Text style={styles.testModeBannerText}>
+            โหมดทดสอบ — ไม่มีการบันทึกข้อมูล
+          </Text>
         </View>
       )}
 
@@ -454,7 +739,6 @@ export default function ReceiveScreen() {
       <TouchableOpacity
         style={styles.dummyButton}
         onPress={() => {
-          // Do absolutely nothing - just absorb the scanner trigger
           console.log("Dummy button triggered - ignoring");
         }}
         activeOpacity={1}
@@ -490,13 +774,151 @@ export default function ReceiveScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Ready to Scan Notice */}
-          <View style={[styles.section, styles.readyNotice]}>
-            <Text style={styles.readyNoticeTitle}>✅ พร้อมสแกนบาร์โค้ด</Text>
-            <Text style={styles.readyNoticeText}>
-              สามารถเริ่มสแกนบาร์โค้ดได้
-            </Text>
+          {/* 1. Lot No. Selection */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>1. เลือก Lot No.*</Text>
+            <View>
+              <View style={styles.customerHeaderRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.selectButton,
+                    showLotDropdown && styles.selectButtonActive,
+                    { flex: 1, marginRight: 8 },
+                  ]}
+                  onPress={() => setShowLotDropdown(!showLotDropdown)}
+                  disabled={loadingLots}
+                >
+                  <View style={styles.selectButtonContent}>
+                    <Text style={styles.selectButtonLabel}>
+                      {(() => {
+                        if (loadingLots) return "กำลังโหลดข้อมูล Lot No...";
+                        if (selectedLot)
+                          return `${selectedLot.refLotNo} | ${selectedLot.createdAt.slice(0, 10)}`;
+                        return "กดเพื่อเลือก Lot No.";
+                      })()}
+                    </Text>
+                    {selectedLot && (
+                      <Text style={styles.selectButtonDescription}>
+                        Code: {selectedLot.code} |{" "}
+                        {selectedLot.shippingTypeCode?.toUpperCase()} |{" "}
+                        {selectedLot.company}
+                      </Text>
+                    )}
+                  </View>
+                  <Text
+                    style={[
+                      styles.selectButtonIcon,
+                      showLotDropdown && styles.selectButtonIconActive,
+                    ]}
+                  >
+                    {showLotDropdown ? "▲" : "▼"}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.reloadButton}
+                  onPress={() => void loadLots()}
+                  disabled={loadingLots}
+                >
+                  <Text style={styles.reloadButtonText}>🔄</Text>
+                </TouchableOpacity>
+              </View>
+
+              {showLotDropdown && (
+                <View style={styles.dropdown}>
+                  <View style={styles.searchContainer}>
+                    <Text style={styles.searchIcon}>🔍</Text>
+                    <TextInput
+                      value={lotSearch}
+                      onChangeText={setLotSearch}
+                      placeholder="ค้นหาด้วย Ref Lot No. หรือ Code..."
+                      style={styles.searchInput}
+                      placeholderTextColor="#9CA3AF"
+                      autoFocus={true}
+                    />
+                    {lotSearch.length > 0 && (
+                      <TouchableOpacity
+                        onPress={() => setLotSearch("")}
+                        style={styles.searchClear}
+                      >
+                        <Text style={styles.searchClearText}>✕</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  <View style={styles.dropdownHeader}>
+                    <Text style={styles.dropdownHeaderText}>
+                      {lotSearch.length > 0
+                        ? `พบ ${filteredLots.length} รายการ`
+                        : `ทั้งหมด ${lots.length} รายการ`}
+                    </Text>
+                  </View>
+
+                  <ScrollView style={styles.dropdownList} nestedScrollEnabled>
+                    {filteredLots.length === 0 ? (
+                      <View style={styles.emptySearch}>
+                        <Text style={styles.emptySearchIcon}>🔍</Text>
+                        <Text style={styles.emptySearchText}>
+                          ไม่พบข้อมูล Lot No.
+                        </Text>
+                        <Text style={styles.emptySearchHint}>
+                          ลองค้นหาด้วยคำอื่น หรือกดปุ่ม 🔄 เพื่อโหลดใหม่
+                        </Text>
+                      </View>
+                    ) : (
+                      filteredLots.map((item) => {
+                        const isSelected =
+                          selectedLot?.mawbUUID === item.mawbUUID;
+                        return (
+                          <TouchableOpacity
+                            key={item.mawbUUID}
+                            style={[
+                              styles.dropdownItem,
+                              isSelected && styles.dropdownItemActive,
+                            ]}
+                            onPress={() => handleSelectLot(item)}
+                          >
+                            <View style={styles.dropdownItemContent}>
+                              <Text style={styles.dropdownItemTitle}>
+                                {item.refLotNo}
+                              </Text>
+                              <Text style={styles.dropdownItemDescription}>
+                                {item.code} |{" "}
+                                {item.shippingTypeCode?.toUpperCase()} |{" "}
+                                {item.createdAt}
+                              </Text>
+                            </View>
+                            {isSelected && (
+                              <Text style={styles.dropdownItemCheck}>✓</Text>
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })
+                    )}
+                  </ScrollView>
+                </View>
+              )}
+            </View>
           </View>
+
+          {/* Ready to Scan Notice */}
+          {canScan ? (
+            <View style={[styles.section, styles.readyNotice]}>
+              <Text style={styles.readyNoticeTitle}>✅ พร้อมสแกนบาร์โค้ด</Text>
+              <Text style={styles.readyNoticeText}>
+                Lot: {selectedLot?.refLotNo}
+              </Text>
+            </View>
+          ) : (
+            <View style={[styles.section, styles.hardwareNotice]}>
+              <Text style={styles.hardwareNoticeTitle}>
+                ⚠️ กรุณาเลือก Lot No.
+              </Text>
+              <Text style={styles.hardwareNoticeText}>
+                เลือก Lot No. ด้านบนก่อนเริ่มสแกน
+              </Text>
+            </View>
+          )}
 
           {/* Manual Input & Settings */}
           <View style={styles.section}>
@@ -518,13 +940,25 @@ export default function ReceiveScreen() {
                   ref={inputRef}
                   value={input}
                   onChangeText={handleInputChange}
-                  placeholder="กรอกหรือสแกน Tracking No."
-                  style={styles.trackingInput}
+                  placeholder={
+                    canScan
+                      ? "กรอกหรือสแกน Tracking No."
+                      : "เลือก Lot No. ด้านบนก่อนเริ่มสแกน"
+                  }
+                  style={[
+                    styles.trackingInput,
+                    !canScan && styles.trackingInputDisabled,
+                  ]}
                   keyboardType="default"
                   returnKeyType="done"
                   placeholderTextColor="#9CA3AF"
                   autoCorrect={false}
-                  editable={canScan && !scannedLock && scanError === null}
+                  editable={
+                    canScan &&
+                    !scannedLock &&
+                    scanError === null &&
+                    lotMismatchData === null
+                  }
                   submitBehavior="submit"
                   onSubmitEditing={autoEnter ? handleManualSubmit : undefined}
                 />
@@ -578,6 +1012,7 @@ export default function ReceiveScreen() {
                 {history.map((item, index) => {
                   const scanTime = new Date(item.scannedAt);
                   const isLatest = index === 0;
+                  const isMismatch = item.status === "lot_mismatch";
 
                   return (
                     <View
@@ -585,6 +1020,7 @@ export default function ReceiveScreen() {
                       style={[
                         styles.historyItem,
                         isLatest && styles.historyItemLatest,
+                        isMismatch && styles.historyItemMismatch,
                       ]}
                     >
                       <View style={styles.historyLeft}>
@@ -592,10 +1028,11 @@ export default function ReceiveScreen() {
                           style={[
                             styles.historyIcon,
                             isLatest && styles.historyIconLatest,
+                            isMismatch && styles.historyIconMismatch,
                           ]}
                         >
                           <Text style={styles.historyIconText}>
-                            {isLatest ? "🆕" : "📦"}
+                            {isMismatch ? "⚠️" : isLatest ? "🆕" : "📦"}
                           </Text>
                         </View>
                         <View style={styles.historyNumber}>
@@ -608,19 +1045,68 @@ export default function ReceiveScreen() {
                         <View style={styles.historyHeader}>
                           <Text style={styles.historyCode}>{item.code}</Text>
                           <View
-                            style={[
-                              styles.historyBadge,
-                              item.mode === "auto"
-                                ? styles.historyBadgeAuto
-                                : styles.historyBadgeManual,
-                            ]}
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 6,
+                            }}
                           >
-                            <Text style={styles.historyBadgeText}>
-                              {item.mode === "auto" ? "AUTO" : "MANUAL"}
-                            </Text>
+                            {isMismatch ? (
+                              <View style={styles.historyBadgeMismatch}>
+                                <Text style={styles.historyBadgeMismatchText}>
+                                  Lot ไม่ตรง
+                                </Text>
+                              </View>
+                            ) : (
+                              <View
+                                style={[
+                                  styles.historyBadge,
+                                  item.mode === "auto"
+                                    ? styles.historyBadgeAuto
+                                    : styles.historyBadgeManual,
+                                ]}
+                              >
+                                <Text style={styles.historyBadgeText}>
+                                  {item.mode === "auto" ? "AUTO" : "MANUAL"}
+                                </Text>
+                              </View>
+                            )}
                           </View>
                         </View>
                         <View style={styles.historyDetails}>
+                          {isMismatch ? (
+                            <View style={styles.mismatchDetailsRow}>
+                              <Text style={styles.originalLotText}>
+                                :: {item.originalLot || "ไม่ระบุ Lot"}
+                              </Text>
+                              <TouchableOpacity
+                                style={styles.changeLotBtn}
+                                onPress={() => {
+                                  if (selectedLot) {
+                                    setLotMismatchData({
+                                      trackingNo: item.code,
+                                      originalLot: item.originalLot || "",
+                                      newLot: selectedLot,
+                                    });
+                                  } else {
+                                    Alert.alert(
+                                      "แจ้งเตือน",
+                                      "กรุณาเลือก Lot No. ก่อนเปลี่ยน Lot",
+                                    );
+                                  }
+                                }}
+                              >
+                                <Text style={styles.changeLotBtnText}>
+                                  เปลี่ยน Lot
+                                </Text>
+                              </TouchableOpacity>
+                            </View>
+                          ) : (
+                            <Text style={styles.historyLotText}>
+                              Lot:{" "}
+                              {item.targetLot || selectedLot?.refLotNo || "-"}
+                            </Text>
+                          )}
                           <Text style={styles.historyTime}>
                             🕐 {scanTime.toLocaleString("th-TH")}
                           </Text>
@@ -721,6 +1207,22 @@ const styles = StyleSheet.create({
     color: "#1F2937",
     marginBottom: 12,
   },
+  customerHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  reloadButton: {
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 8,
+    padding: 16,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  reloadButtonText: {
+    fontSize: 20,
+  },
   selectButton: {
     backgroundColor: "#FFFFFF",
     borderWidth: 1,
@@ -732,8 +1234,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
   },
   selectButtonActive: {
-    borderColor: "#3B82F6",
-    backgroundColor: "#EFF6FF",
+    borderColor: "#10B981",
+    backgroundColor: "#ECFDF5",
   },
   selectButtonContent: {
     flex: 1,
@@ -754,7 +1256,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   selectButtonIconActive: {
-    color: "#3B82F6",
+    color: "#10B981",
   },
   dropdown: {
     backgroundColor: "#FFFFFF",
@@ -825,7 +1327,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   dropdownItemActive: {
-    backgroundColor: "#EFF6FF",
+    backgroundColor: "#ECFDF5",
   },
   dropdownItemContent: {
     flex: 1,
@@ -842,7 +1344,7 @@ const styles = StyleSheet.create({
   },
   dropdownItemCheck: {
     fontSize: 18,
-    color: "#3B82F6",
+    color: "#10B981",
     marginLeft: 8,
   },
   emptySearch: {
@@ -1019,6 +1521,9 @@ const styles = StyleSheet.create({
   historyItemLatest: {
     backgroundColor: "#ECFDF5",
   },
+  historyItemMismatch: {
+    backgroundColor: "#FEF2F2",
+  },
   historyLeft: {
     alignItems: "center",
     marginRight: 12,
@@ -1034,6 +1539,9 @@ const styles = StyleSheet.create({
   },
   historyIconLatest: {
     backgroundColor: "#10B981",
+  },
+  historyIconMismatch: {
+    backgroundColor: "#FEE2E2",
   },
   historyIconText: {
     fontSize: 16,
@@ -1079,12 +1587,46 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     color: "#065F46",
   },
+  historyBadgeMismatch: {
+    backgroundColor: "#EF4444",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  historyBadgeMismatchText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
   historyDetails: {
     gap: 2,
   },
-  historyCustomer: {
-    fontSize: 14,
-    color: "#6B7280",
+  mismatchDetailsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 2,
+  },
+  originalLotText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#DC2626",
+  },
+  changeLotBtn: {
+    backgroundColor: "#F59E0B",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  changeLotBtnText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
+  historyLotText: {
+    fontSize: 13,
+    color: "#065F46",
+    fontWeight: "500",
   },
   historyTime: {
     fontSize: 14,

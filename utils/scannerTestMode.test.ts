@@ -6,5 +6,7 @@ describe("scanner test outcomes", () => {
     expect(getScannerTestOutcome("TEST001")).toBe("success");
     expect(getScannerTestOutcome("INVALID001")).toBe("invalid");
     expect(getScannerTestOutcome("SYSTEM001")).toBe("system");
+    expect(getScannerTestOutcome("TESTD02")).toBe("lot_mismatch");
+    expect(getScannerTestOutcome("LOTMISMATCH123")).toBe("lot_mismatch");
   });
 });

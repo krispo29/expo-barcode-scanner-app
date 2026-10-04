@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <title>RS51_HS Scanner Test Sheet - Code 128</title>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 20px auto;
+      max-width: 900px;
+      padding: 0 16px;
+      color: #1e293b;
+      background: #f8fafc;
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 4px;
+      color: #0f172a;
+    }
+    .subtitle {
+      font-size: 14px;
+      color: #64748b;
+      margin-bottom: 24px;
+    }
+    .banner {
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-left: 4px solid #ef4444;
+      padding: 12px 16px;
+      border-radius: 6px;
+      margin-bottom: 24px;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .card.alert-card {
+      border-color: #fca5a5;
+      background: #fff5f5;
+    }
+    .card.lot-card {
+      border-color: #fde68a;
+      background: #fffbeb;
+    }
+    .card-title {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 4px;
+      color: #334155;
+    }
+    .card-desc {
+      font-size: 12px;
+      color: #64748b;
+      margin-bottom: 8px;
+      min-height: 36px;
+    }
+    .barcode-svg {
+      max-width: 100%;
+      height: 80px;
+      margin: 0 auto;
+    }
+    .print-btn {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      margin-bottom: 16px;
+    }
+    .print-btn:hover {
+      background: #1d4ed8;
+    }
+    @media print {
+      body { background: white; margin: 0; }
+      .print-btn { display: none; }
+      .card { break-inside: avoid; border: 1px solid #ccc; box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div style="display: flex; justify-content: space-between; align-items: center;">
+    <div>
+      <h1>CipherLab RS51_HS — Barcode Test Sheet</h1>
+      <p class="subtitle">Code 128 barcodes for validating offline test mode & Receive Lot No. (scanner-test APK)</p>
+    </div>
+    <button class="print-btn" onclick="window.print()">พิมพ์หน้านี้ (Print)</button>
+  </div>
+
+  <div class="banner">
+    <strong>ข้อควรจำก่อนทดสอบ:</strong><br>
+    1. ตรวจสอบว่าแอปมีแถบสีแดง <code>โหมดทดสอบ — ไม่มีการบันทึกข้อมูล</code> ที่ด้านบนสุดของหน้า รับเข้า / ปล่อยออก<br>
+    2. ตั้งค่า ReaderConfig บน RS51: Profile ผูกกับ <code>com.cipherlab.scanbarcodeapp</code>, โหมด Keyboard Emulation (KeyEvent), Delay 0 ms<br>
+    3. หน้า Receive: ต้องเลือก Lot No. ด้านบนก่อนเริ่มสแกน
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-title">1. TEST001 (Auto Mode)</div>
+      <div class="card-desc">สแกนขณะ Auto เปิดอยู่ &rarr; บันทึกสำเร็จอัตโนมัติ (~150 ms) เสียง Air</div>
+      <svg class="barcode-svg" data-value="TEST001"></svg>
+    </div>
+
+    <div class="card">
+      <div class="card-title">2. TEST002 (Auto Mode)</div>
+      <div class="card-desc">สแกนต่อเนื่อง &rarr; เคลียร์ช่อง input และ refocus ทันที</div>
+      <svg class="barcode-svg" data-value="TEST002"></svg>
+    </div>
+
+    <div class="card">
+      <div class="card-title">3. TEST003 (Auto Mode)</div>
+      <div class="card-desc">สแกนต่อเนื่อง &rarr; เพิ่มเข้าประวัติการสแกน</div>
+      <svg class="barcode-svg" data-value="TEST003"></svg>
+    </div>
+
+    <div class="card">
+      <div class="card-title">4. TEST004 (Auto Mode)</div>
+      <div class="card-desc">สแกนต่อเนื่อง &rarr; ไม่ต้องกด Enter หรือแตะจอ</div>
+      <svg class="barcode-svg" data-value="TEST004"></svg>
+    </div>
+
+    <div class="card">
+      <div class="card-title">5. TEST005 (Auto Mode)</div>
+      <div class="card-desc">สแกนรหัสที่ 5 &rarr; ครบชุดสแกนปกติ Auto ON</div>
+      <svg class="barcode-svg" data-value="TEST005"></svg>
+    </div>
+
+    <div class="card lot-card">
+      <div class="card-title" style="color: #b45309;">6. TESTD01 (Lot Match)</div>
+      <div class="card-desc">สแกนเมื่อเลือก Lot ตรง &rarr; บันทึกสำเร็จปกติ</div>
+      <svg class="barcode-svg" data-value="TESTD01"></svg>
+    </div>
+
+    <div class="card lot-card">
+      <div class="card-title" style="color: #b45309;">7. TESTD02 (Lot Mismatch &rarr; Change Lot)</div>
+      <div class="card-desc">สแกนเมื่อเลือก Lot ไม่ตรง &rarr; เด้ง Modal ยืนยันเปลี่ยน Lot (Lot เดิม: TEST-LOT-RECEIVE-001)</div>
+      <svg class="barcode-svg" data-value="TESTD02"></svg>
+    </div>
+
+    <div class="card alert-card">
+      <div class="card-title" style="color: #dc2626;">8. DUP001 (Duplicate Test)</div>
+      <div class="card-desc">สแกน 2 ครั้ง &rarr; ครั้งที่ 2 ต้องเด้ง Modal สีแดง: "รายการนี้ถูกสแกนแล้ว"</div>
+      <svg class="barcode-svg" data-value="DUP001"></svg>
+    </div>
+
+    <div class="card alert-card">
+      <div class="card-title" style="color: #dc2626;">9. INVALID001 (Invalid Test)</div>
+      <div class="card-desc">สแกน &rarr; ต้องเด้ง Modal สีแดง: "เลขนี้ไม่ถูกต้อง" ต้องกด ยืนยัน เท่านั้น</div>
+      <svg class="barcode-svg" data-value="INVALID001"></svg>
+    </div>
+
+    <div class="card alert-card">
+      <div class="card-title" style="color: #dc2626;">10. SYSTEM001 (System Error Test)</div>
+      <div class="card-desc">สแกน &rarr; ต้องเด้ง Modal: "ไม่สามารถตรวจสอบรายการได้"</div>
+      <svg class="barcode-svg" data-value="SYSTEM001"></svg>
+    </div>
+
+    <div class="card">
+      <div class="card-title">11. TEST006 (Enter Suffix Test)</div>
+      <div class="card-desc">เปิด Enter suffix ใน ReaderConfig แล้วสแกน &rarr; ต้องบันทึกครั้งเดียว ห้ามส่งซ้ำ</div>
+      <svg class="barcode-svg" data-value="TEST006"></svg>
+    </div>
+
+    <div class="card">
+      <div class="card-title">12. MANUAL001 (Auto Off Test)</div>
+      <div class="card-desc">ปิดสวิตช์ Auto &rarr; สแกนต้องไม่ส่งอัตโนมัติ ต้องกดยืนยัน/Manual</div>
+      <svg class="barcode-svg" data-value="MANUAL001"></svg>
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      if (window.JsBarcode) {
+        document.querySelectorAll(".barcode-svg").forEach(function(el) {
+          JsBarcode(el, el.getAttribute("data-value"), {
+            format: "CODE128",
+            width: 2,
+            height: 50,
+            displayValue: true,
+            fontSize: 14,
+            margin: 5
+          });
+        });
+      }
+    });
+  </script>
+</body>
+</html>
