@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
+  FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -8,7 +9,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -46,6 +46,78 @@ export type ThumbSelectionModalProps = {
   loading?: boolean;
 };
 
+// Memoized item row to eliminate unnecessary re-renders in large lists (500-700 items)
+export const ThumbModalItemRow = React.memo(function ThumbModalItemRow({
+  item,
+  onSelect,
+}: {
+  item: ThumbModalItem;
+  onSelect: (item: ThumbModalItem) => void;
+}) {
+  const isSelected = !!item.selected;
+  const badgeVariant = item.badge?.variant || "gray";
+
+  return (
+    <TouchableOpacity
+      style={[styles.itemCard, isSelected && styles.itemCardSelected]}
+      onPress={() => onSelect(item)}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityState={{ selected: isSelected }}
+    >
+      <View style={styles.itemMain}>
+        <View style={styles.itemTitleRow}>
+          <Text
+            style={[styles.itemTitle, isSelected && styles.itemTitleSelected]}
+            numberOfLines={1}
+          >
+            {item.title}
+          </Text>
+          {item.badge ? (
+            <View
+              style={[
+                styles.itemBadge,
+                badgeVariant === "blue" && styles.badgeBlue,
+                badgeVariant === "green" && styles.badgeGreen,
+                badgeVariant === "amber" && styles.badgeAmber,
+                badgeVariant === "purple" && styles.badgePurple,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.itemBadgeText,
+                  badgeVariant === "blue" && styles.badgeTextBlue,
+                  badgeVariant === "green" && styles.badgeTextGreen,
+                  badgeVariant === "amber" && styles.badgeTextAmber,
+                  badgeVariant === "purple" && styles.badgeTextPurple,
+                ]}
+              >
+                {item.badge.text}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+        {item.subtitle ? (
+          <Text
+            style={[
+              styles.itemSubtitle,
+              isSelected && styles.itemSubtitleSelected,
+            ]}
+            numberOfLines={2}
+          >
+            {item.subtitle}
+          </Text>
+        ) : null}
+      </View>
+      {isSelected ? (
+        <View style={styles.checkContainer}>
+          <Text style={styles.checkText}>✓</Text>
+        </View>
+      ) : null}
+    </TouchableOpacity>
+  );
+});
+
 export function ThumbSelectionModal({
   visible,
   title,
@@ -64,6 +136,53 @@ export function ThumbSelectionModal({
 }: ThumbSelectionModalProps) {
   const insets = useSafeAreaInsets();
 
+  // Local search text for instant typing feedback (0ms latency)
+  const [localSearch, setLocalSearch] = useState(searchValue);
+
+  // Synchronize when parent searchValue changes (e.g. modal opens/resets)
+  useEffect(() => {
+    setLocalSearch(searchValue);
+  }, [searchValue]);
+
+  // Debounce search update to parent (150ms) to keep scrolling and typing buttery smooth
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (localSearch !== searchValue) {
+        onSearchChange(localSearch);
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [localSearch, searchValue, onSearchChange]);
+
+  const handleClearSearch = useCallback(() => {
+    setLocalSearch("");
+    onSearchChange("");
+  }, [onSearchChange]);
+
+  const renderItem = useCallback(
+    ({ item }: { item: ThumbModalItem }) => (
+      <ThumbModalItemRow item={item} onSelect={onSelectItem} />
+    ),
+    [onSelectItem],
+  );
+
+  const renderSeparator = useCallback(
+    () => <View style={styles.separator} />,
+    [],
+  );
+
+  const renderEmpty = useCallback(
+    () => (
+      <View style={styles.emptyContainer}>
+        <Text style={styles.emptyIcon}>📦</Text>
+        <Text style={styles.emptyText}>{emptyText}</Text>
+      </View>
+    ),
+    [emptyText],
+  );
+
+  const keyExtractor = useCallback((item: ThumbModalItem) => item.id, []);
+
   return (
     <Modal
       visible={visible}
@@ -71,195 +190,130 @@ export function ThumbSelectionModal({
       animationType="slide"
       onRequestClose={onClose}
     >
-      <TouchableWithoutFeedback onPress={onClose}>
-        <View style={styles.backdrop}>
-          <TouchableWithoutFeedback onPress={() => {}}>
-            <KeyboardAvoidingView
-              behavior={Platform.OS === "ios" ? "padding" : undefined}
-              style={[
-                styles.sheetContainer,
-                { paddingBottom: Math.max(insets.bottom, 16) },
-              ]}
-            >
-              {/* Drag Handle Indicator */}
-              <View style={styles.handleContainer}>
-                <View style={styles.handleBar} />
-              </View>
+      <View style={styles.backdrop}>
+        {/* Backdrop touchable to close modal when tapping outside */}
+        <TouchableOpacity
+          style={StyleSheet.absoluteFillObject}
+          activeOpacity={1}
+          onPress={onClose}
+          accessibilityLabel="ปิดหน้าต่าง"
+        />
 
-              {/* Header */}
-              <View style={styles.header}>
-                <View style={styles.headerTextContainer}>
-                  <Text style={styles.title}>{title}</Text>
-                  {subtitle ? (
-                    <Text style={styles.subtitle}>{subtitle}</Text>
-                  ) : null}
-                </View>
-                <TouchableOpacity
-                  style={styles.closeButton}
-                  onPress={onClose}
-                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                  accessibilityRole="button"
-                  accessibilityLabel="ปิดหน้าต่าง"
-                >
-                  <Text style={styles.closeButtonText}>✕</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Filter Tabs (Optional, e.g. All / Air / Sea) */}
-              {tabs && tabs.length > 0 && onTabChange ? (
-                <View style={styles.tabContainer}>
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.tabScroll}
-                  >
-                    {tabs.map((tab) => {
-                      const isActive = activeTab === tab.key;
-                      return (
-                        <TouchableOpacity
-                          key={tab.key}
-                          style={[styles.tab, isActive && styles.tabActive]}
-                          onPress={() => onTabChange(tab.key)}
-                          activeOpacity={0.7}
-                        >
-                          <Text
-                            style={[
-                              styles.tabText,
-                              isActive && styles.tabTextActive,
-                            ]}
-                          >
-                            {tab.label}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-              ) : null}
-
-              {/* Search Bar */}
-              <View style={styles.searchContainer}>
-                <Text style={styles.searchIcon}>🔍</Text>
-                <TextInput
-                  style={styles.searchInput}
-                  placeholder={searchPlaceholder}
-                  placeholderTextColor="#9CA3AF"
-                  value={searchValue}
-                  onChangeText={onSearchChange}
-                  autoCorrect={false}
-                  autoCapitalize="none"
-                  clearButtonMode="while-editing"
-                />
-                {searchValue.length > 0 && (
-                  <TouchableOpacity
-                    style={styles.clearSearchBtn}
-                    onPress={() => onSearchChange("")}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Text style={styles.clearSearchText}>✕</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-
-              {/* Items Summary Count */}
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryText}>
-                  {loading
-                    ? "กำลังโหลดข้อมูล..."
-                    : `พบทั้งหมด ${items.length} รายการ`}
+        {/* Full-height Bottom Sheet container */}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={[
+            styles.sheetContainer,
+            { paddingBottom: Math.max(insets.bottom, 12) },
+          ]}
+        >
+          {/* Header */}
+          <View style={styles.header}>
+            <View style={styles.headerTextContainer}>
+              <Text style={styles.title} numberOfLines={1}>
+                {title}
+              </Text>
+              {subtitle ? (
+                <Text style={styles.subtitle} numberOfLines={1}>
+                  {subtitle}
                 </Text>
-              </View>
+              ) : null}
+            </View>
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={onClose}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityRole="button"
+              accessibilityLabel="ปิดหน้าต่าง"
+            >
+              <Text style={styles.closeButtonText}>✕</Text>
+            </TouchableOpacity>
+          </View>
 
-              {/* Items List */}
+          {/* Filter Tabs (Optional, e.g. All / Air / Sea) */}
+          {tabs && tabs.length > 0 && onTabChange ? (
+            <View style={styles.tabContainer}>
               <ScrollView
-                style={styles.list}
-                contentContainerStyle={styles.listContent}
-                keyboardShouldPersistTaps="handled"
-                nestedScrollEnabled
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.tabScroll}
               >
-                {items.length === 0 ? (
-                  <View style={styles.emptyContainer}>
-                    <Text style={styles.emptyIcon}>📦</Text>
-                    <Text style={styles.emptyText}>{emptyText}</Text>
-                  </View>
-                ) : (
-                  items.map((item) => {
-                    const isSelected = !!item.selected;
-                    const badgeVariant = item.badge?.variant || "gray";
-
-                    return (
-                      <TouchableOpacity
-                        key={item.id}
+                {tabs.map((tab) => {
+                  const isActive = activeTab === tab.key;
+                  return (
+                    <TouchableOpacity
+                      key={tab.key}
+                      style={[styles.tab, isActive && styles.tabActive]}
+                      onPress={() => onTabChange(tab.key)}
+                      activeOpacity={0.7}
+                    >
+                      <Text
                         style={[
-                          styles.itemCard,
-                          isSelected && styles.itemCardSelected,
+                          styles.tabText,
+                          isActive && styles.tabTextActive,
                         ]}
-                        onPress={() => onSelectItem(item)}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected: isSelected }}
                       >
-                        <View style={styles.itemMain}>
-                          <View style={styles.itemTitleRow}>
-                            <Text
-                              style={[
-                                styles.itemTitle,
-                                isSelected && styles.itemTitleSelected,
-                              ]}
-                              numberOfLines={1}
-                            >
-                              {item.title}
-                            </Text>
-                            {item.badge ? (
-                              <View
-                                style={[
-                                  styles.itemBadge,
-                                  badgeVariant === "blue" && styles.badgeBlue,
-                                  badgeVariant === "green" && styles.badgeGreen,
-                                  badgeVariant === "amber" && styles.badgeAmber,
-                                  badgeVariant === "purple" && styles.badgePurple,
-                                ]}
-                              >
-                                <Text
-                                  style={[
-                                    styles.itemBadgeText,
-                                    badgeVariant === "blue" && styles.badgeTextBlue,
-                                    badgeVariant === "green" && styles.badgeTextGreen,
-                                    badgeVariant === "amber" && styles.badgeTextAmber,
-                                    badgeVariant === "purple" && styles.badgeTextPurple,
-                                  ]}
-                                >
-                                  {item.badge.text}
-                                </Text>
-                              </View>
-                            ) : null}
-                          </View>
-                          {item.subtitle ? (
-                            <Text
-                              style={[
-                                styles.itemSubtitle,
-                                isSelected && styles.itemSubtitleSelected,
-                              ]}
-                              numberOfLines={2}
-                            >
-                              {item.subtitle}
-                            </Text>
-                          ) : null}
-                        </View>
-                        {isSelected ? (
-                          <View style={styles.checkContainer}>
-                            <Text style={styles.checkText}>✓</Text>
-                          </View>
-                        ) : null}
-                      </TouchableOpacity>
-                    );
-                  })
-                )}
+                        {tab.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </ScrollView>
-            </KeyboardAvoidingView>
-          </TouchableWithoutFeedback>
-        </View>
-      </TouchableWithoutFeedback>
+            </View>
+          ) : null}
+
+          {/* Search Bar */}
+          <View style={styles.searchContainer}>
+            <Text style={styles.searchIcon}>🔍</Text>
+            <TextInput
+              style={styles.searchInput}
+              placeholder={searchPlaceholder}
+              placeholderTextColor="#9CA3AF"
+              value={localSearch}
+              onChangeText={setLocalSearch}
+              autoCorrect={false}
+              autoCapitalize="none"
+              clearButtonMode="never"
+            />
+            {localSearch.length > 0 && (
+              <TouchableOpacity
+                style={styles.clearSearchBtn}
+                onPress={handleClearSearch}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="ล้างข้อความค้นหา"
+              >
+                <Text style={styles.clearSearchText}>✕</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Items Summary Count */}
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryText}>
+              {loading
+                ? "กำลังโหลดข้อมูล..."
+                : `พบทั้งหมด ${items.length} รายการ`}
+            </Text>
+          </View>
+
+          {/* Virtualized Items List with FlatList */}
+          <FlatList
+            data={items}
+            keyExtractor={keyExtractor}
+            renderItem={renderItem}
+            ItemSeparatorComponent={renderSeparator}
+            ListEmptyComponent={renderEmpty}
+            style={styles.list}
+            contentContainerStyle={styles.listContent}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator
+            initialNumToRender={12}
+            maxToRenderPerBatch={12}
+            windowSize={7}
+            removeClippedSubviews={Platform.OS === "android"}
+          />
+        </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
@@ -274,31 +328,24 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    maxHeight: "85%",
-    minHeight: "45%",
+    height: "92%",
+    maxHeight: "94%",
     paddingTop: 8,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.15,
     shadowRadius: 10,
     elevation: 10,
-  },
-  handleContainer: {
-    alignItems: "center",
-    paddingVertical: 6,
-  },
-  handleBar: {
-    width: 40,
-    height: 4,
-    backgroundColor: "#D1D5DB",
-    borderRadius: 2,
+    overflow: "hidden",
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6",
   },
   headerTextContainer: {
     flex: 1,
@@ -310,7 +357,7 @@ const styles = StyleSheet.create({
     color: "#111827",
   },
   subtitle: {
-    fontSize: 13,
+    fontSize: 12,
     color: "#6B7280",
     marginTop: 2,
   },
@@ -329,7 +376,7 @@ const styles = StyleSheet.create({
   },
   tabContainer: {
     paddingHorizontal: 16,
-    marginVertical: 6,
+    marginVertical: 4,
   },
   tabScroll: {
     gap: 8,
@@ -363,20 +410,21 @@ const styles = StyleSheet.create({
     borderColor: "#E5E7EB",
     borderRadius: 10,
     marginHorizontal: 16,
-    marginTop: 8,
+    marginTop: 6,
+    marginBottom: 2,
     paddingHorizontal: 12,
-    height: 46,
+    height: 42,
   },
   searchIcon: {
-    fontSize: 16,
+    fontSize: 15,
     marginRight: 8,
     color: "#9CA3AF",
   },
   searchInput: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 14,
     color: "#111827",
-    paddingVertical: 8,
+    paddingVertical: 6,
   },
   clearSearchBtn: {
     padding: 6,
@@ -387,8 +435,8 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   summaryRow: {
-    paddingHorizontal: 20,
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
   },
   summaryText: {
     fontSize: 12,
@@ -400,8 +448,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   listContent: {
-    paddingBottom: 16,
-    gap: 8,
+    paddingTop: 4,
+    paddingBottom: 24,
+  },
+  separator: {
+    height: 8,
   },
   itemCard: {
     flexDirection: "row",
@@ -411,8 +462,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#E5E7EB",
     borderRadius: 12,
-    padding: 14,
-    minHeight: 56,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    minHeight: 54,
   },
   itemCardSelected: {
     backgroundColor: "#EFF6FF",
@@ -427,7 +479,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    marginBottom: 4,
+    marginBottom: 2,
   },
   itemTitle: {
     fontSize: 15,

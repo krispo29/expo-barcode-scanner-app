@@ -352,9 +352,11 @@ export default function ReceiveScreen() {
     useCallback(() => {
       if (!isScannerTestMode) {
         void ensureAuthenticated();
-        void loadLots();
+        if (lots.length === 0) {
+          void loadLots();
+        }
       }
-    }, [ensureAuthenticated, loadLots]),
+    }, [ensureAuthenticated, loadLots, lots.length]),
   );
 
   useEffect(() => {
@@ -1204,6 +1206,19 @@ export default function ReceiveScreen() {
     }));
   }, [lots, recentLotMawbs, selectedLot]);
 
+  const handleSelectLotFromModal = useCallback(
+    (item: ThumbModalItem) => {
+      const target = lots.find((l) => l.mawbUUID === item.id);
+      if (target) handleSelectLot(target);
+    },
+    [lots, handleSelectLot],
+  );
+
+  const handleCloseLotModal = useCallback(() => {
+    setShowLotModal(false);
+    focusTrackingInput();
+  }, [focusTrackingInput]);
+
   return (
     <TouchableWithoutFeedback onPress={focusTrackingInput} accessible={false}>
       <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -1251,14 +1266,8 @@ export default function ReceiveScreen() {
           tabs={lotFilterTabs}
           activeTab={lotFilterTab}
           onTabChange={setLotFilterTab}
-          onSelectItem={(item) => {
-            const target = lots.find((l) => l.mawbUUID === item.id);
-            if (target) handleSelectLot(target);
-          }}
-          onClose={() => {
-            setShowLotModal(false);
-            focusTrackingInput();
-          }}
+          onSelectItem={handleSelectLotFromModal}
+          onClose={handleCloseLotModal}
           loading={loadingLots}
         />
 

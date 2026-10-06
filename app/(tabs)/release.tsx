@@ -451,9 +451,11 @@ export default function ReleaseScreen() {
     useCallback(() => {
       if (!isScannerTestMode) {
         void ensureAuthenticated();
-        void loadCustomers();
+        if (customers.length === 0) {
+          void loadCustomers();
+        }
       }
-    }, [ensureAuthenticated, loadCustomers]),
+    }, [ensureAuthenticated, loadCustomers, customers.length]),
   );
 
   useEffect(() => {
@@ -975,6 +977,19 @@ export default function ReleaseScreen() {
     }));
   }, [customer, customers, recentCustomerUuids]);
 
+  const handleSelectCustomerFromModal = useCallback(
+    (item: ThumbModalItem) => {
+      const target = customers.find((c) => c.uuid === item.id);
+      if (target) handleSelectCustomer(target);
+    },
+    [customers, handleSelectCustomer],
+  );
+
+  const handleCloseCustomerModal = useCallback(() => {
+    setShowCustomerModal(false);
+    focusTrackingInput();
+  }, [focusTrackingInput]);
+
   return (
     <TouchableWithoutFeedback onPress={focusTrackingInput} accessible={false}>
       <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -995,14 +1010,8 @@ export default function ReleaseScreen() {
           searchPlaceholder="ค้นหาด้วยชื่อ, รหัส, อีเมล หรือเบอร์..."
           searchValue={customerSearch}
           onSearchChange={setCustomerSearch}
-          onSelectItem={(item) => {
-            const target = customers.find((c) => c.uuid === item.id);
-            if (target) handleSelectCustomer(target);
-          }}
-          onClose={() => {
-            setShowCustomerModal(false);
-            focusTrackingInput();
-          }}
+          onSelectItem={handleSelectCustomerFromModal}
+          onClose={handleCloseCustomerModal}
           loading={loadingCustomers}
         />
 
