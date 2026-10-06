@@ -23,7 +23,7 @@ export type QuickChipsProps = {
   emptyText?: string;
 };
 
-export function QuickChips({
+export const QuickChips = React.memo(function QuickChips({
   title = "⚡ สลับด่วน (Quick Switch):",
   items,
   onSelect,
@@ -103,7 +103,7 @@ export function QuickChips({
       </ScrollView>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {

@@ -8,6 +8,7 @@ jest.mock("@react-native-async-storage/async-storage", () =>
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   calculateScanVelocity,
+  clearMetricsMemoryCacheForTesting,
   getInitialShiftMetrics,
   getSoundSettings,
   getTodayDateString,
@@ -20,6 +21,7 @@ import {
 
 describe("productivityMetrics utility", () => {
   beforeEach(async () => {
+    clearMetricsMemoryCacheForTesting();
     await AsyncStorage.clear();
   });
 

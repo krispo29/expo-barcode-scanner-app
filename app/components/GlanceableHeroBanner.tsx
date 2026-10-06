@@ -20,7 +20,7 @@ export type GlanceableHeroBannerProps = {
   actionText?: string;
 };
 
-export function GlanceableHeroBanner({
+export const GlanceableHeroBanner = React.memo(function GlanceableHeroBanner({
   statusType,
   title,
   trackingCode,
@@ -121,7 +121,7 @@ export function GlanceableHeroBanner({
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {

@@ -8,6 +8,7 @@ jest.mock("@react-native-async-storage/async-storage", () =>
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   appendScanRecord,
+  clearAllScanHistoryCacheForTesting,
   clearScanHistory,
   getReceiveHistoryKey,
   getReleaseHistoryKey,
@@ -17,6 +18,7 @@ import {
 
 describe("scanHistory utility", () => {
   beforeEach(async () => {
+    clearAllScanHistoryCacheForTesting();
     await AsyncStorage.clear();
   });
 

@@ -1,3 +1,4 @@
+import React from "react";
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 export type ScanErrorKind =
@@ -61,7 +62,7 @@ export type ScanErrorModalProps = {
   onSaveToOffline?: () => void;
 };
 
-export function ScanErrorModal({
+export const ScanErrorModal = React.memo(function ScanErrorModal({
   kind,
   onConfirm,
   onSaveToOffline,
@@ -132,7 +133,7 @@ export function ScanErrorModal({
       </View>
     </Modal>
   );
-}
+});
 
 const styles = StyleSheet.create({
   backdrop: {

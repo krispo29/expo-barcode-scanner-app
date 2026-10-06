@@ -27,31 +27,57 @@ export function getInitialShiftMetrics(date: string = getTodayDateString()): Shi
   };
 }
 
+// In-Memory cache for shift metrics per key (0ms reads, non-blocking writes for rapid scanning)
+const metricsMemoryCache = new Map<string, ShiftMetrics>();
+
+export function clearMetricsMemoryCacheForTesting(): void {
+  metricsMemoryCache.clear();
+}
+
 export async function loadShiftMetrics(key: string): Promise<ShiftMetrics> {
   const today = getTodayDateString();
+
+  // Fast path: In-memory cache hit
+  if (metricsMemoryCache.has(key)) {
+    const cached = metricsMemoryCache.get(key)!;
+    if (cached.date === today) {
+      return cached;
+    }
+  }
+
   try {
     const raw = await AsyncStorage.getItem(key);
-    if (!raw) return getInitialShiftMetrics(today);
+    if (!raw) {
+      const initial = getInitialShiftMetrics(today);
+      metricsMemoryCache.set(key, initial);
+      return initial;
+    }
     const parsed = JSON.parse(raw) as ShiftMetrics;
     if (parsed.date !== today) {
       // Auto-reset when new day starts
       const fresh = getInitialShiftMetrics(today);
-      await saveShiftMetrics(key, fresh);
+      metricsMemoryCache.set(key, fresh);
+      void saveShiftMetrics(key, fresh);
       return fresh;
     }
-    return {
+    const result: ShiftMetrics = {
       date: parsed.date,
       totalScans: Number(parsed.totalScans) || 0,
       byCategory: parsed.byCategory || {},
       recentTimestamps: Array.isArray(parsed.recentTimestamps) ? parsed.recentTimestamps : [],
     };
+    metricsMemoryCache.set(key, result);
+    return result;
   } catch (err) {
     console.error(`Error loading shift metrics (${key}):`, err);
-    return getInitialShiftMetrics(today);
+    const fallback = getInitialShiftMetrics(today);
+    metricsMemoryCache.set(key, fallback);
+    return fallback;
   }
 }
 
 export async function saveShiftMetrics(key: string, metrics: ShiftMetrics): Promise<void> {
+  metricsMemoryCache.set(key, metrics);
   try {
     await AsyncStorage.setItem(key, JSON.stringify(metrics));
   } catch (err) {
@@ -84,12 +110,18 @@ export async function recordScanMetric(
     recentTimestamps: prunedTimestamps,
   };
 
-  await saveShiftMetrics(key, updated);
+  // Eagerly update in-memory cache so UI gets the fresh metrics immediately
+  metricsMemoryCache.set(key, updated);
+
+  // Persist to storage in background (non-blocking) so scanning feedback is instant
+  void saveShiftMetrics(key, updated);
+
   return updated;
 }
 
 export async function resetShiftMetrics(key: string): Promise<ShiftMetrics> {
   const fresh = getInitialShiftMetrics(getTodayDateString());
+  metricsMemoryCache.set(key, fresh);
   await saveShiftMetrics(key, fresh);
   return fresh;
 }

@@ -12,7 +12,7 @@ type TrackingCodeTextProps = {
  * Renders tracking code with the last N characters highlighted.
  * Warehouse operators identify packages by the trailing digits on shipping labels.
  */
-export function TrackingCodeText({
+export const TrackingCodeText = React.memo(function TrackingCodeText({
   code,
   style,
   highlightStyle,
@@ -38,7 +38,7 @@ export function TrackingCodeText({
       <Text style={[styles.highlightText, highlightStyle]}>{suffix}</Text>
     </Text>
   );
-}
+});
 
 const styles = StyleSheet.create({
   baseText: {

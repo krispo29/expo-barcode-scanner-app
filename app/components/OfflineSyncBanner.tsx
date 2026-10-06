@@ -14,7 +14,7 @@ export type OfflineSyncBannerProps = {
   onClear?: () => void;
 };
 
-export function OfflineSyncBanner({
+export const OfflineSyncBanner = React.memo(function OfflineSyncBanner({
   count,
   syncing = false,
   onSync,
@@ -53,7 +53,7 @@ export function OfflineSyncBanner({
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   container: {

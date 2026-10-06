@@ -19,33 +19,34 @@ export type ProductivityMetricsBarProps = {
   onToggleSoundMute: () => void;
 };
 
-export const ProductivityMetricsBar: React.FC<ProductivityMetricsBarProps> = ({
-  totalScans,
-  scanVelocitySpm,
-  currentCategoryLabel,
-  currentCategoryCount,
-  soundEnabled,
-  soundBoosted,
-  onResetTally,
-  onToggleSoundBoost,
-  onToggleSoundMute,
-}) => {
-  const handleConfirmReset = () => {
-    Alert.alert(
-      "รีเซ็ตยอดกะ (Reset Shift)",
-      `ยอดสะสมปัจจุบัน: ${totalScans} ชิ้น\nคุณต้องการรีเซ็ตตัวนับยอดกะนี้เป็น 0 ใช่หรือไม่?`,
-      [
-        { text: "ยกเลิก", style: "cancel" },
-        {
-          text: "รีเซ็ต",
-          style: "destructive",
-          onPress: onResetTally,
-        },
-      ],
-    );
-  };
+export const ProductivityMetricsBar: React.FC<ProductivityMetricsBarProps> = React.memo(
+  function ProductivityMetricsBar({
+    totalScans,
+    scanVelocitySpm,
+    currentCategoryLabel,
+    currentCategoryCount,
+    soundEnabled,
+    soundBoosted,
+    onResetTally,
+    onToggleSoundBoost,
+    onToggleSoundMute,
+  }) {
+    const handleConfirmReset = () => {
+      Alert.alert(
+        "รีเซ็ตยอดกะ (Reset Shift)",
+        `ยอดสะสมปัจจุบัน: ${totalScans} ชิ้น\nคุณต้องการรีเซ็ตตัวนับยอดกะนี้เป็น 0 ใช่หรือไม่?`,
+        [
+          { text: "ยกเลิก", style: "cancel" },
+          {
+            text: "รีเซ็ต",
+            style: "destructive",
+            onPress: onResetTally,
+          },
+        ],
+      );
+    };
 
-  return (
+    return (
     <View style={styles.container}>
       {/* Metric 1: Shift Total */}
       <View style={styles.metricItem}>
@@ -111,7 +112,7 @@ export const ProductivityMetricsBar: React.FC<ProductivityMetricsBarProps> = ({
       </View>
     </View>
   );
-};
+});
 
 const styles = StyleSheet.create({
   container: {

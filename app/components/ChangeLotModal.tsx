@@ -52,7 +52,7 @@ export type ChangeLotModalProps = {
   onSwitchToOriginalLot?: () => void;
 };
 
-export function ChangeLotModal({
+export const ChangeLotModal = React.memo(function ChangeLotModal({
   visible,
   trackingNo,
   originalLot,
@@ -155,7 +155,7 @@ export function ChangeLotModal({
       </View>
     </Modal>
   );
-}
+});
 
 const styles = StyleSheet.create({
   backdrop: {

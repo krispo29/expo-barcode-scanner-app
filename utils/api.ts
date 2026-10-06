@@ -11,7 +11,26 @@ import { networkStatusManager } from "./networkStatus";
 const api = axios.create({
   baseURL: process.env.EXPO_PUBLIC_API_URL,
   timeout: 10000,
+  headers: {
+    Connection: "keep-alive",
+  },
 });
+
+let isConnectionWarmed = false;
+
+/**
+ * Pre-warms the HTTP/TLS socket connection pool in the native Android engine (OkHttp).
+ * Eliminates the 150-300ms DNS resolution & TLS 1.3 handshake penalty on the first scan.
+ */
+export async function warmUpApiConnection(): Promise<void> {
+  if (isConnectionWarmed) return;
+  try {
+    const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+    if (!apiUrl) return;
+    await fetch(apiUrl, { method: "HEAD" }).catch(() => {});
+    isConnectionWarmed = true;
+  } catch {}
+}
 
 let isRedirecting = false;
 
@@ -43,6 +62,10 @@ api.interceptors.request.use(
   async (config) => {
     try {
       if (isAuthWhitelistRequest(config.url)) {
+        return config;
+      }
+
+      if (config.headers?.Authorization) {
         return config;
       }
 

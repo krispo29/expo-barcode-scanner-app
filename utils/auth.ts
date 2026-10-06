@@ -103,6 +103,20 @@ export function isExpired(
   return now >= expiresAt - EXPIRY_SKEW_MS;
 }
 
+// In-Memory cache for high-performance zero-latency auth reads (prevents repeated AsyncStorage bridge I/O)
+let memorySession: StoredSession | null = null;
+
+export function resetMemoryAuthCacheForTesting(): void {
+  memorySession = null;
+}
+
+export function getValidAccessTokenSync(): string | null {
+  if (memorySession && memorySession.accessToken && !isExpired(memorySession.expiresAt)) {
+    return memorySession.accessToken;
+  }
+  return null;
+}
+
 export async function readStoredSession(): Promise<StoredSession> {
   const entries = await AsyncStorage.multiGet([
     ACCESS_TOKEN_KEY,
@@ -114,14 +128,18 @@ export async function readStoredSession(): Promise<StoredSession> {
   const expiresAtRaw = storedValues[TOKEN_EXPIRES_AT_KEY];
   const expiresAt = expiresAtRaw ? Number.parseInt(expiresAtRaw, 10) : null;
 
-  return {
+  const session: StoredSession = {
     accessToken: storedValues[ACCESS_TOKEN_KEY] ?? null,
     userData: storedValues[USER_DATA_KEY] ?? null,
     expiresAt: Number.isFinite(expiresAt) ? expiresAt : null,
   };
+
+  memorySession = session;
+  return session;
 }
 
 export async function clearStoredAuth(): Promise<void> {
+  memorySession = null;
   await AsyncStorage.multiRemove([
     ACCESS_TOKEN_KEY,
     USER_DATA_KEY,
@@ -137,6 +155,13 @@ export async function persistAuthSession(
     throw new Error("Unable to determine token expiry");
   }
 
+  // Eagerly update in-memory cache so subsequent reads within the same frame are instant
+  memorySession = {
+    accessToken: payload.access_token,
+    userData: JSON.stringify(payload),
+    expiresAt,
+  };
+
   await AsyncStorage.multiSet([
     [ACCESS_TOKEN_KEY, payload.access_token],
     [USER_DATA_KEY, JSON.stringify(payload)],
@@ -147,6 +172,16 @@ export async function persistAuthSession(
 }
 
 export async function getValidAccessToken(): Promise<string | null> {
+  // Fast path: In-memory cache hit (0ms latency, zero async bridge I/O)
+  if (memorySession) {
+    if (!memorySession.accessToken || isExpired(memorySession.expiresAt)) {
+      await clearStoredAuth();
+      return null;
+    }
+    return memorySession.accessToken;
+  }
+
+  // Slow path: Cold start, populate memory cache from disk
   const session = await readStoredSession();
   if (!session.accessToken || isExpired(session.expiresAt)) {
     await clearStoredAuth();
