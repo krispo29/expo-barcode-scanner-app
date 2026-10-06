@@ -59,14 +59,8 @@ export class IndustrialSoundManager {
       try {
         const { sound } = await ExpoAudio.Sound.createAsync(
           asset,
-          { volume, shouldPlay: false },
+          { volume, shouldPlay: false, isLooping: false },
         );
-        // Pre-rewind immediately upon playback finish so subsequent scans trigger playAsync instantly without seek lag
-        sound.setOnPlaybackStatusUpdate((status) => {
-          if (status.isLoaded && status.didJustFinish) {
-            void sound.setPositionAsync(0).catch(() => {});
-          }
-        });
         this.soundObjects[key as SoundKey] = sound;
       } catch (err) {
         console.warn(`Failed to load sound asset (${key}):`, err);
@@ -128,23 +122,26 @@ export class IndustrialSoundManager {
     if (!sound) return;
 
     try {
-      const status = await sound.getStatusAsync();
-      if (status.isLoaded) {
-        if (status.isPlaying) {
-          await sound.replayAsync();
-        } else {
-          // Fast-path: already rewound, playAsync starts immediately (<10ms)
-          if (status.positionMillis > 0) {
-            await sound.setPositionAsync(0);
-          }
-          await sound.playAsync();
-        }
-      }
-    } catch {
-      try {
-        await sound.replayAsync();
-      } catch (err) {
-        console.warn(`Error playing sound (${key}):`, err);
+      await sound.replayAsync();
+    } catch (err) {
+      console.warn(`Error playing sound (${key}):`, err);
+    }
+  }
+
+  public async stopSound(key: SoundKey): Promise<void> {
+    const sound = this.soundObjects[key];
+    if (!sound) return;
+    try {
+      await sound.stopAsync();
+    } catch {}
+  }
+
+  public async stopAll(): Promise<void> {
+    for (const sound of Object.values(this.soundObjects)) {
+      if (sound) {
+        try {
+          await sound.stopAsync();
+        } catch {}
       }
     }
   }
@@ -165,6 +162,7 @@ export class IndustrialSoundManager {
   }
 
   public async unloadAll(): Promise<void> {
+    await this.stopAll();
     for (const [key, sound] of Object.entries(this.soundObjects)) {
       try {
         await sound?.unloadAsync();
