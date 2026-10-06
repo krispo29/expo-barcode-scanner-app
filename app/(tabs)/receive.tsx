@@ -952,9 +952,9 @@ export default function ReceiveScreen() {
           return;
         }
 
-        console.log("=== Scan Request ===");
-        console.log("Tracking No:", normalized);
-        console.log("MawbUUID:", selectedLot.mawbUUID);
+        if (__DEV__) {
+          console.log("=== Scan Request ===", normalized, selectedLot.mawbUUID);
+        }
 
         const apiUrl = process.env.EXPO_PUBLIC_API_URL;
         const endpoint = `${apiUrl}/v1/orders/received_inbound/${normalized}?mawbUUID=${selectedLot.mawbUUID}&device=mobile`;
@@ -969,7 +969,9 @@ export default function ReceiveScreen() {
           },
         });
 
-        console.log("=== Scan Response ===", response.data);
+        if (__DEV__) {
+          console.log("=== Scan Response ===", response.data);
+        }
 
         if (response.data && response.data.code === 200) {
           const shippingType =

@@ -61,6 +61,12 @@ export class IndustrialSoundManager {
           asset,
           { volume, shouldPlay: false },
         );
+        // Pre-rewind immediately upon playback finish so subsequent scans trigger playAsync instantly without seek lag
+        sound.setOnPlaybackStatusUpdate((status) => {
+          if (status.isLoaded && status.didJustFinish) {
+            void sound.setPositionAsync(0).catch(() => {});
+          }
+        });
         this.soundObjects[key as SoundKey] = sound;
       } catch (err) {
         console.warn(`Failed to load sound asset (${key}):`, err);
@@ -122,9 +128,24 @@ export class IndustrialSoundManager {
     if (!sound) return;
 
     try {
-      await sound.replayAsync();
-    } catch (err) {
-      console.warn(`Error playing sound (${key}):`, err);
+      const status = await sound.getStatusAsync();
+      if (status.isLoaded) {
+        if (status.isPlaying) {
+          await sound.replayAsync();
+        } else {
+          // Fast-path: already rewound, playAsync starts immediately (<10ms)
+          if (status.positionMillis > 0) {
+            await sound.setPositionAsync(0);
+          }
+          await sound.playAsync();
+        }
+      }
+    } catch {
+      try {
+        await sound.replayAsync();
+      } catch (err) {
+        console.warn(`Error playing sound (${key}):`, err);
+      }
     }
   }
 

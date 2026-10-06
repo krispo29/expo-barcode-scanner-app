@@ -850,9 +850,9 @@ export default function ReleaseScreen() {
           return;
         }
 
-        console.log("=== Scan Request ===");
-        console.log("Tracking No:", normalized);
-        console.log("Customer Code:", customer.code);
+        if (__DEV__) {
+          console.log("=== Scan Request ===", normalized, customer.code);
+        }
 
         const apiUrl = process.env.EXPO_PUBLIC_API_URL;
         const endpoint = `${apiUrl}/v1/orders/released/${normalized}?customer_code=${customer.code}&device=mobile`;
@@ -862,8 +862,6 @@ export default function ReleaseScreen() {
           return;
         }
 
-        console.log("Endpoint:", endpoint);
-
         const response = await api.get<ApiResponse>(endpoint, {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -871,8 +869,9 @@ export default function ReleaseScreen() {
           },
         });
 
-        console.log("=== Scan Response ===");
-        console.log("Response:", response.data);
+        if (__DEV__) {
+          console.log("=== Scan Response ===", response.data);
+        }
 
         if (response.data && response.data.code === 200) {
           idCounter.current += 1;
