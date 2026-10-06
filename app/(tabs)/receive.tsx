@@ -7,6 +7,7 @@ import {
   AppState,
   Alert,
   FlatList,
+  Image,
   Platform,
   ScrollView,
   StyleSheet,
@@ -1425,7 +1426,14 @@ export default function ReceiveScreen() {
         {/* Compact Header - App Title + Network Status + Logout */}
         <View style={styles.compactHeader}>
           <View style={styles.compactHeaderContent}>
-            <Text style={styles.compactHeaderTitle}>📥 SHIP2CU Receive</Text>
+            <View style={styles.compactHeaderTitleRow}>
+              <Image
+                source={require("../../assets/images/ship2cu_favicon.png")}
+                style={styles.headerFavicon}
+                resizeMode="contain"
+              />
+              <Text style={styles.compactHeaderTitle}>SHIP2CU Receive</Text>
+            </View>
           </View>
           <NetworkStatusBadge
             isOnline={isOnline}
@@ -1760,11 +1768,20 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#FFFFFF",
   },
+  compactHeaderTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  headerFavicon: {
+    width: 24,
+    height: 24,
+    marginRight: 8,
+    borderRadius: 5,
+  },
   compactHeaderTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "700",
     color: "#34D399",
-    marginBottom: 2,
   },
   compactHeaderSubtitle: {
     fontSize: 12,
