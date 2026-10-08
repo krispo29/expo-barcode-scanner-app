@@ -1373,13 +1373,6 @@ export default function ReceiveScreen() {
               : ""
           }
           loading={changeLotLoading}
-          canSwitchToOriginal={
-            !!findLotByCodeOrRef(lots, lotMismatchData?.originalLot)
-          }
-          onSwitchToOriginalLot={() => {
-            const match = findLotByCodeOrRef(lots, lotMismatchData?.originalLot);
-            if (match) handleSwitchDeviceLot(match);
-          }}
           onCancel={() => {
             setLotMismatchData(null);
             focusTrackingInput();

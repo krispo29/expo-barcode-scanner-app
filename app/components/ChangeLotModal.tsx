@@ -76,7 +76,7 @@ export const ChangeLotModal = React.memo(function ChangeLotModal({
             แจ้งเตือน: Lot ไม่ตรงกับที่เลือก
           </Text>
           <Text style={styles.subtitle}>
-            พัสดุนี้ผูกอยู่กับ Lot เดิม คุณต้องการดำเนินการอย่างไร?
+            พัสดุนี้ผูกอยู่กับ Lot เดิม ต้องการย้ายพัสดุเข้า Lot นี้ หรือปิดหน้าต่างเพื่อเลือก Lot ใหม่?
           </Text>
 
           <View style={styles.detailBox}>
@@ -103,22 +103,6 @@ export const ChangeLotModal = React.memo(function ChangeLotModal({
           </View>
 
           <View style={styles.actionsContainer}>
-            {canSwitchToOriginal && onSwitchToOriginalLot && (
-              <TouchableOpacity
-                accessibilityRole="button"
-                style={[styles.button, styles.switchLotButton]}
-                onPress={onSwitchToOriginalLot}
-                disabled={loading}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.switchLotButtonText}>
-                  ⚡ สลับเครื่องเป็น Lot เดิม ({originalLot})
-                </Text>
-                <Text style={styles.switchLotButtonHint}>
-                  เหมาะสำหรับเมื่อต้องการสแกนต่อก้อนนี้ทันที
-                </Text>
-              </TouchableOpacity>
-            )}
 
             <TouchableOpacity
               accessibilityRole="button"
@@ -247,19 +231,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     minHeight: 48,
-  },
-  switchLotButton: {
-    backgroundColor: "#0284C7",
-  },
-  switchLotButtonText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  switchLotButtonHint: {
-    color: "#BAE6FD",
-    fontSize: 11,
-    marginTop: 2,
   },
   confirmButton: {
     backgroundColor: "#F59E0B",
