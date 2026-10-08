@@ -38,22 +38,37 @@ export const TEST_LOTS: LotNo[] = [
   },
   {
     code: "HPC26012",
-    refLotNo: "TEST-LOT-RECEIVE-003-SEA",
+    refLotNo: "TEST-LOT-SEA-001",
     company: "HPC",
     countryCode: "TH",
     shippingTypeCode: "sea",
-    mawbUUID: "8820171b-7c1e-4a8d-b310-a476ef490497",
+    mawbUUID: "7710171b-8f2d-4f9e-a520-a476ef490777",
     createdAt: "02-10-2026 10:02:20",
   },
 ];
 
 export const getScannerTestOutcome = (code: string): ScannerTestOutcome => {
-  if (code.startsWith("INVALID")) return "invalid";
-  if (code.startsWith("SYSTEM")) return "system";
+  const upper = code.toUpperCase();
   if (
-    code === "TESTD02" ||
-    code.startsWith("LOTMISMATCH") ||
-    code.startsWith("MISMATCH")
+    upper.startsWith("INVALID") ||
+    upper.startsWith("NOTFOUND") ||
+    upper.includes("INVALID") ||
+    upper.includes("NOTFOUND")
+  ) {
+    return "invalid";
+  }
+  if (
+    upper.startsWith("SYSTEM") ||
+    upper.startsWith("OFFLINE") ||
+    upper.includes("SYSTEM") ||
+    upper.includes("OFFLINE")
+  ) {
+    return "system";
+  }
+  if (
+    upper === "TESTD02" ||
+    upper.includes("MISMATCH") ||
+    upper.startsWith("LOTMISMATCH")
   ) {
     return "lot_mismatch";
   }

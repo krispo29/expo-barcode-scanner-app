@@ -45,6 +45,7 @@ import {
 import { OfflineSyncBanner } from "../components/OfflineSyncBanner";
 import {
   addToOfflineQueue,
+  clearOfflineQueue,
   getOfflineQueue,
   isTrackingInQueue,
   OFFLINE_STORAGE_KEYS,
@@ -71,6 +72,7 @@ import { useNetworkStatus } from "../../hooks/useNetworkStatus";
 import { useHardwareScanner } from "../../hooks/useHardwareScanner";
 import {
   appendScanRecord,
+  clearAllScanHistoryCacheForTesting,
   clearScanHistory,
   getReceiveHistoryKey,
   loadScanHistory,
@@ -293,13 +295,17 @@ export default function ReceiveScreen() {
   useEffect(() => {
     if (!selectedLot) {
       setHistory([]);
+      scannedCodesRef.current.clear();
       return;
     }
     const key = getReceiveHistoryKey(selectedLot.mawbUUID);
+    scannedCodesRef.current.clear();
     void loadScanHistory<ScanRecord>(key).then((loaded) => {
       setHistory(loaded);
       for (const item of loaded) {
-        scannedCodesRef.current.add(item.code);
+        if (item.status === "success") {
+          scannedCodesRef.current.add(item.code);
+        }
       }
     });
   }, [selectedLot]);
@@ -569,11 +575,53 @@ export default function ReceiveScreen() {
             setHistory([]);
             scannedCodesRef.current.clear();
             triggerSuccessHaptic();
+            focusTrackingInput();
           },
         },
       ],
     );
-  }, [selectedLot]);
+  }, [focusTrackingInput, selectedLot]);
+
+  const handleResetAllTestData = useCallback(async () => {
+    for (const lot of TEST_LOTS) {
+      await clearScanHistory(getReceiveHistoryKey(lot.mawbUUID));
+    }
+    clearAllScanHistoryCacheForTesting();
+    await resetShiftMetrics(METRICS_STORAGE_KEYS.RECEIVE_METRICS);
+    await clearOfflineQueue(OFFLINE_STORAGE_KEYS.RECEIVE_QUEUE);
+
+    if (typeof window !== "undefined" && window.localStorage) {
+      try {
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const k = window.localStorage.key(i);
+          if (
+            k &&
+            (k.startsWith("@scan_history") ||
+              k.startsWith("@shift_metrics") ||
+              k.startsWith("@offline_queue"))
+          ) {
+            keysToRemove.push(k);
+          }
+        }
+        keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+      } catch (e) {
+        console.warn("Failed to clear localStorage:", e);
+      }
+    }
+
+    scannedCodesRef.current.clear();
+    setHistory([]);
+    setOfflineQueue([]);
+    setShiftMetrics(getInitialShiftMetrics());
+    setHeroBanner(null);
+    setLastStatus("-");
+    setScanError(null);
+    setLastFailedScan(null);
+    setLotMismatchData(null);
+    triggerSuccessHaptic();
+    focusTrackingInput();
+  }, [focusTrackingInput]);
 
   const handleSyncOfflineQueue = useCallback(async () => {
     if (offlineQueue.length === 0 || syncingQueue || !selectedLot) return;
@@ -803,10 +851,20 @@ export default function ReceiveScreen() {
         return;
       }
 
+      const testOutcome = isScannerTestMode
+        ? getScannerTestOutcome(normalized)
+        : null;
+      const isTestSpecialCase =
+        isScannerTestMode &&
+        (testOutcome === "lot_mismatch" ||
+          testOutcome === "invalid" ||
+          testOutcome === "system");
+
       const isDuplicate =
-        scannedCodesRef.current.has(normalized) ||
-        isTrackingInQueue(offlineQueue, normalized) ||
-        history.some((h) => h.code === normalized);
+        !isTestSpecialCase &&
+        (scannedCodesRef.current.has(normalized) ||
+          isTrackingInQueue(offlineQueue, normalized) ||
+          history.some((h) => h.code === normalized && h.status === "success"));
       if (isDuplicate) {
         setLastStatus(`${normalized} • สแกนซ้ำในเครื่องนี้`);
         setHeroBanner({
@@ -860,19 +918,13 @@ export default function ReceiveScreen() {
           badgeLabel: "Lot Mismatch",
           badgeType: "warning",
           subtitle: `Lot เดิม: ${originalLot || "ไม่ระบุ"} | เลือก Lot: ${selectedLot.refLotNo}`,
-          actionText: matchingLot
-            ? `สลับเครื่องเป็น ${matchingLot.refLotNo}`
-            : "เปลี่ยน Lot",
+          actionText: "เปลี่ยน Lot",
           onActionPress: () => {
-            if (matchingLot) {
-              handleSwitchDeviceLot(matchingLot);
-            } else {
-              setLotMismatchData({
-                trackingNo,
-                originalLot: originalLot || "",
-                newLot: selectedLot,
-              });
-            }
+            setLotMismatchData({
+              trackingNo,
+              originalLot: originalLot || "",
+              newLot: selectedLot,
+            });
           },
         });
 
@@ -890,9 +942,13 @@ export default function ReceiveScreen() {
         if (isScannerTestMode) {
           const outcome = getScannerTestOutcome(normalized);
           if (outcome === "lot_mismatch") {
+            const mismatchLot =
+              selectedLot.refLotNo === "TEST-LOT-RECEIVE-001"
+                ? "TEST-LOT-RECEIVE-002"
+                : "TEST-LOT-RECEIVE-001";
             triggerLotMismatch(
               normalized,
-              "LOT_NO_NOT_MATCH:TEST-LOT-RECEIVE-001",
+              `LOT_NO_NOT_MATCH:${mismatchLot}`,
             );
             return;
           }
@@ -1402,6 +1458,15 @@ export default function ReceiveScreen() {
             <Text style={styles.testModeBannerText}>
               โหมดทดสอบ — ไม่มีการบันทึกข้อมูล
             </Text>
+            <TouchableOpacity
+              style={styles.testModeResetBtn}
+              onPress={() => void handleResetAllTestData()}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.testModeResetBtnText}>
+                🧹 ล้างข้อมูลเทสทั้งหมด
+              </Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -1793,14 +1858,28 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   testModeBanner: {
+    flexDirection: "row",
     alignItems: "center",
-    padding: 10,
+    justifyContent: "space-between",
+    paddingVertical: 8,
+    paddingHorizontal: 16,
     backgroundColor: "#B91C1C",
   },
   testModeBannerText: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "800",
     color: "#FFFFFF",
+  },
+  testModeResetBtn: {
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  testModeResetBtnText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#B91C1C",
   },
   section: {
     marginBottom: 20,

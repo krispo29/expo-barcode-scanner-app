@@ -258,9 +258,11 @@ export default function ReleaseScreen() {
   useEffect(() => {
     if (!customer) {
       setHistory([]);
+      scannedCodesRef.current.clear();
       return;
     }
     const key = getReleaseHistoryKey(customer.uuid);
+    scannedCodesRef.current.clear();
     void loadScanHistory<ScanRecord>(key).then((loaded) => {
       setHistory(loaded);
       for (const item of loaded) {
@@ -773,10 +775,18 @@ export default function ReleaseScreen() {
         return;
       }
 
+      const testOutcome = isScannerTestMode
+        ? getScannerTestOutcome(normalized)
+        : null;
+      const isTestSpecialCase =
+        isScannerTestMode &&
+        (testOutcome === "invalid" || testOutcome === "system");
+
       const isDuplicate =
-        scannedCodesRef.current.has(normalized) ||
-        isTrackingInQueue(offlineQueue, normalized) ||
-        history.some((h) => h.code === normalized);
+        !isTestSpecialCase &&
+        (scannedCodesRef.current.has(normalized) ||
+          isTrackingInQueue(offlineQueue, normalized) ||
+          history.some((h) => h.code === normalized));
       if (isDuplicate) {
         setLastStatus(`${normalized} • ยิงออกซ้ำในเครื่องนี้`);
         setHeroBanner({
