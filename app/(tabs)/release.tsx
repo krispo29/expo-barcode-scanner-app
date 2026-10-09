@@ -1221,11 +1221,25 @@ export default function ReleaseScreen() {
 
                 {/* Quick Customer Chips (Thumb Reach Zone) */}
                 <QuickChips
-                  title="⚡ สลับลูกค้าด่วน (1-Tap):"
+                  title="⚡ สลับลูกค้าด่วน:"
                   items={quickCustomerChips}
                   onSelect={(chip) => {
                     const target = customers.find((c) => c.uuid === chip.id);
-                    if (target) handleSelectCustomer(target);
+                    if (!target || target.uuid === customer?.uuid) return;
+                    Alert.alert(
+                      "ยืนยันสลับลูกค้า",
+                      `ต้องการสลับเครื่องจากลูกค้า "${customer?.name || "-"}" ไปเป็น "${target.name}" ใช่หรือไม่?`,
+                      [
+                        { text: "ยกเลิก", style: "cancel" },
+                        {
+                          text: "ยืนยันสลับลูกค้า",
+                          style: "default",
+                          onPress: () => {
+                            handleSelectCustomer(target);
+                          },
+                        },
+                      ],
+                    );
                   }}
                 />
               </View>
