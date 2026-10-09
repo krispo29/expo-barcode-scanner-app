@@ -45,6 +45,7 @@ import {
   removeFromOfflineQueue,
 } from "../../utils/offlineQueue";
 import { updateRecentIds } from "../../utils/recentSelections";
+import { showConfirmDialog } from "../../utils/dialogs";
 import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
 import api from "../../utils/api";
 import { getScannerTestOutcome, isScannerTestMode } from "../../utils/scannerTestMode";
@@ -1226,20 +1227,15 @@ export default function ReleaseScreen() {
                   onSelect={(chip) => {
                     const target = customers.find((c) => c.uuid === chip.id);
                     if (!target || target.uuid === customer?.uuid) return;
-                    Alert.alert(
-                      "ยืนยันสลับลูกค้า",
-                      `ต้องการสลับเครื่องจากลูกค้า "${customer?.name || "-"}" ไปเป็น "${target.name}" ใช่หรือไม่?`,
-                      [
-                        { text: "ยกเลิก", style: "cancel" },
-                        {
-                          text: "ยืนยันสลับลูกค้า",
-                          style: "default",
-                          onPress: () => {
-                            handleSelectCustomer(target);
-                          },
-                        },
-                      ],
-                    );
+                    showConfirmDialog({
+                      title: "ยืนยันสลับลูกค้า",
+                      message: `ต้องการสลับเครื่องจากลูกค้า "${customer?.name || "-"}" ไปเป็น "${target.name}" ใช่หรือไม่?`,
+                      confirmText: "ยืนยันสลับลูกค้า",
+                      cancelText: "ยกเลิก",
+                      onConfirm: () => {
+                        handleSelectCustomer(target);
+                      },
+                    });
                   }}
                 />
               </View>

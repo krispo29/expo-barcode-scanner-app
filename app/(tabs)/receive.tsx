@@ -53,6 +53,7 @@ import {
   removeFromOfflineQueue,
 } from "../../utils/offlineQueue";
 import { updateRecentIds } from "../../utils/recentSelections";
+import { showConfirmDialog } from "../../utils/dialogs";
 import { clearStoredAuth, getValidAccessToken } from "../../utils/auth";
 import api from "../../utils/api";
 import {
@@ -561,25 +562,21 @@ export default function ReceiveScreen() {
 
   const handleClearBatchHistory = useCallback(() => {
     if (!selectedLot) return;
-    Alert.alert(
-      "เริ่มรอบใหม่",
-      `ต้องการล้างประวัติการสแกนของ Lot ${selectedLot.refLotNo} ใช่หรือไม่? (ข้อมูลในระบบจะไม่ได้รับผลกระทบ)`,
-      [
-        { text: "ยกเลิก", style: "cancel" },
-        {
-          text: "ล้างประวัติ",
-          style: "destructive",
-          onPress: async () => {
-            const key = getReceiveHistoryKey(selectedLot.mawbUUID);
-            await clearScanHistory(key);
-            setHistory([]);
-            scannedCodesRef.current.clear();
-            triggerSuccessHaptic();
-            focusTrackingInput();
-          },
-        },
-      ],
-    );
+    showConfirmDialog({
+      title: "เริ่มรอบใหม่",
+      message: `ต้องการล้างประวัติการสแกนของ Lot ${selectedLot.refLotNo} ใช่หรือไม่? (ข้อมูลในระบบจะไม่ได้รับผลกระทบ)`,
+      confirmText: "ล้างประวัติ",
+      cancelText: "ยกเลิก",
+      destructive: true,
+      onConfirm: async () => {
+        const key = getReceiveHistoryKey(selectedLot.mawbUUID);
+        await clearScanHistory(key);
+        setHistory([]);
+        scannedCodesRef.current.clear();
+        triggerSuccessHaptic();
+        focusTrackingInput();
+      },
+    });
   }, [focusTrackingInput, selectedLot]);
 
   const handleResetAllTestData = useCallback(async () => {
@@ -1184,129 +1181,112 @@ export default function ReceiveScreen() {
 
   handleDetectedRef.current = handleDetected;
 
-  const handleConfirmChangeLot = useCallback(() => {
+  const handleConfirmChangeLot = useCallback(async () => {
     if (!lotMismatchData) return;
     const { trackingNo, newLot } = lotMismatchData;
+    setChangeLotLoading(true);
 
-    Alert.alert(
-      "ยืนยันการย้าย Lot พัสดุ",
-      `ต้องการย้ายพัสดุ "${trackingNo}" เข้าสู่ Lot "${newLot.refLotNo}" ใช่หรือไม่?\n\n(หากไม่แน่ใจ กรุณากดยกเลิกแล้วนำพัสดุไปตรวจนับใหม่)`,
-      [
-        {
-          text: "ยกเลิก",
-          style: "cancel",
+    try {
+      if (isScannerTestMode) {
+        setLotMismatchData(null);
+        scannedCodesRef.current.add(trackingNo);
+        const updatedRecord: ScanRecord = {
+          id: `${Date.now()}-${idCounter.current}`,
+          code: trackingNo,
+          scannedAt: new Date().toISOString(),
+          mode: "manual",
+          status: "success",
+          targetLot: newLot.refLotNo,
+          shippingType: newLot.shippingTypeCode?.toLowerCase() || "air",
+        };
+        const key = getReceiveHistoryKey(newLot.mawbUUID);
+        void appendScanRecord(key, updatedRecord).then(setHistory);
+        setLastStatus(
+          `${trackingNo} • เปลี่ยน Lot สำเร็จ (${newLot.refLotNo})`,
+        );
+        setHeroBanner({
+          statusType: "success",
+          title: "เปลี่ยน Lot สำเร็จ",
+          trackingCode: trackingNo,
+          badgeLabel: newLot.shippingTypeCode?.toUpperCase(),
+          badgeType:
+            newLot.shippingTypeCode?.toLowerCase() === "sea" ? "sea" : "air",
+          subtitle: `ย้ายเข้า Lot: ${newLot.refLotNo}`,
+        });
+        triggerSuccessHaptic();
+        void industrialAudio.playSound("air");
+        void recordScanMetric(
+          METRICS_STORAGE_KEYS.RECEIVE_METRICS,
+          newLot.refLotNo,
+        ).then(setShiftMetrics);
+        focusTrackingInput();
+        return;
+      }
+
+      const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+      const shippingType = newLot.shippingTypeCode?.toLowerCase() || "air";
+      const endpoint = `${apiUrl}/v1/orders/received_inbound/${trackingNo}?newMawbUUID=${newLot.mawbUUID}&shippingType=${shippingType}&device=mobile`;
+
+      const token = await ensureAuthenticated();
+      if (!token) return;
+
+      const response = await api.get<ApiResponse>(endpoint, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
         },
-        {
-          text: "ยืนยันการย้าย",
-          style: "destructive",
-          onPress: async () => {
-            setChangeLotLoading(true);
+      });
 
-            try {
-              if (isScannerTestMode) {
-                setLotMismatchData(null);
-                scannedCodesRef.current.add(trackingNo);
-                const updatedRecord: ScanRecord = {
-                  id: `${Date.now()}-${idCounter.current}`,
-                  code: trackingNo,
-                  scannedAt: new Date().toISOString(),
-                  mode: "manual",
-                  status: "success",
-                  targetLot: newLot.refLotNo,
-                  shippingType: newLot.shippingTypeCode?.toLowerCase() || "air",
-                };
-                const key = getReceiveHistoryKey(newLot.mawbUUID);
-                void appendScanRecord(key, updatedRecord).then(setHistory);
-                setLastStatus(
-                  `${trackingNo} • เปลี่ยน Lot สำเร็จ (${newLot.refLotNo})`,
-                );
-                setHeroBanner({
-                  statusType: "success",
-                  title: "เปลี่ยน Lot สำเร็จ",
-                  trackingCode: trackingNo,
-                  badgeLabel: newLot.shippingTypeCode?.toUpperCase(),
-                  badgeType:
-                    newLot.shippingTypeCode?.toLowerCase() === "sea" ? "sea" : "air",
-                  subtitle: `ย้ายเข้า Lot: ${newLot.refLotNo}`,
-                });
-                triggerSuccessHaptic();
-                void industrialAudio.playSound("air");
-                void recordScanMetric(
-                  METRICS_STORAGE_KEYS.RECEIVE_METRICS,
-                  newLot.refLotNo,
-                ).then(setShiftMetrics);
-                focusTrackingInput();
-                return;
-              }
-
-              const apiUrl = process.env.EXPO_PUBLIC_API_URL;
-              const shippingType = newLot.shippingTypeCode?.toLowerCase() || "air";
-              const endpoint = `${apiUrl}/v1/orders/received_inbound/${trackingNo}?newMawbUUID=${newLot.mawbUUID}&shippingType=${shippingType}&device=mobile`;
-
-              const token = await ensureAuthenticated();
-              if (!token) return;
-
-              const response = await api.get<ApiResponse>(endpoint, {
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  "Content-Type": "application/json",
-                },
-              });
-
-              if (response.data && response.data.code === 200) {
-                setLotMismatchData(null);
-                scannedCodesRef.current.add(trackingNo);
-                const updatedRecord: ScanRecord = {
-                  id: `${Date.now()}-${idCounter.current}`,
-                  code: trackingNo,
-                  scannedAt: new Date().toISOString(),
-                  mode: "manual",
-                  status: "success",
-                  targetLot: newLot.refLotNo,
-                  shippingType,
-                };
-                const key = getReceiveHistoryKey(newLot.mawbUUID);
-                void appendScanRecord(key, updatedRecord).then(setHistory);
-                setLastStatus(
-                  `${trackingNo} • เปลี่ยน Lot สำเร็จ (${newLot.refLotNo})`,
-                );
-                setHeroBanner({
-                  statusType: "success",
-                  title: "เปลี่ยน Lot สำเร็จ",
-                  trackingCode: trackingNo,
-                  badgeLabel: shippingType.toUpperCase(),
-                  badgeType: shippingType === "sea" ? "sea" : "air",
-                  subtitle: `ย้ายเข้า Lot: ${newLot.refLotNo}`,
-                });
-                triggerSuccessHaptic();
-                if (shippingType === "sea") {
-                  void industrialAudio.playSound("sea");
-                } else {
-                  void industrialAudio.playSound("air");
-                }
-                void recordScanMetric(
-                  METRICS_STORAGE_KEYS.RECEIVE_METRICS,
-                  newLot.refLotNo,
-                ).then(setShiftMetrics);
-                focusTrackingInput();
-              } else {
-                Alert.alert(
-                  "เกิดข้อผิดพลาด",
-                  response.data?.message || "ไม่สามารถเปลี่ยน Lot ได้",
-                );
-              }
-            } catch (err: any) {
-              console.error("Change lot error:", err);
-              const msg =
-                err?.response?.data?.message || "เกิดข้อผิดพลาดในการเปลี่ยน Lot";
-              Alert.alert("เกิดข้อผิดพลาด", msg);
-            } finally {
-              setChangeLotLoading(false);
-            }
-          },
-        },
-      ],
-    );
+      if (response.data && response.data.code === 200) {
+        setLotMismatchData(null);
+        scannedCodesRef.current.add(trackingNo);
+        const updatedRecord: ScanRecord = {
+          id: `${Date.now()}-${idCounter.current}`,
+          code: trackingNo,
+          scannedAt: new Date().toISOString(),
+          mode: "manual",
+          status: "success",
+          targetLot: newLot.refLotNo,
+          shippingType,
+        };
+        const key = getReceiveHistoryKey(newLot.mawbUUID);
+        void appendScanRecord(key, updatedRecord).then(setHistory);
+        setLastStatus(
+          `${trackingNo} • เปลี่ยน Lot สำเร็จ (${newLot.refLotNo})`,
+        );
+        setHeroBanner({
+          statusType: "success",
+          title: "เปลี่ยน Lot สำเร็จ",
+          trackingCode: trackingNo,
+          badgeLabel: shippingType.toUpperCase(),
+          badgeType: shippingType === "sea" ? "sea" : "air",
+          subtitle: `ย้ายเข้า Lot: ${newLot.refLotNo}`,
+        });
+        triggerSuccessHaptic();
+        if (shippingType === "sea") {
+          void industrialAudio.playSound("sea");
+        } else {
+          void industrialAudio.playSound("air");
+        }
+        void recordScanMetric(
+          METRICS_STORAGE_KEYS.RECEIVE_METRICS,
+          newLot.refLotNo,
+        ).then(setShiftMetrics);
+        focusTrackingInput();
+      } else {
+        Alert.alert(
+          "เกิดข้อผิดพลาด",
+          response.data?.message || "ไม่สามารถเปลี่ยน Lot ได้",
+        );
+      }
+    } catch (err: any) {
+      console.error("Change lot error:", err);
+      const msg =
+        err?.response?.data?.message || "เกิดข้อผิดพลาดในการเปลี่ยน Lot";
+      Alert.alert("เกิดข้อผิดพลาด", msg);
+    } finally {
+      setChangeLotLoading(false);
+    }
   }, [
     ensureAuthenticated,
     focusTrackingInput,
@@ -1618,20 +1598,15 @@ export default function ReceiveScreen() {
                 onSelect={(chip) => {
                   const target = lots.find((l) => l.mawbUUID === chip.id);
                   if (!target || target.mawbUUID === selectedLot?.mawbUUID) return;
-                  Alert.alert(
-                    "ยืนยันสลับ Lot",
-                    `ต้องการสลับเครื่องจาก Lot "${selectedLot?.refLotNo || "-"}" ไปเป็น Lot "${target.refLotNo}" ใช่หรือไม่?`,
-                    [
-                      { text: "ยกเลิก", style: "cancel" },
-                      {
-                        text: "ยืนยันสลับ Lot",
-                        style: "default",
-                        onPress: () => {
-                          handleSelectLot(target);
-                        },
-                      },
-                    ],
-                  );
+                  showConfirmDialog({
+                    title: "ยืนยันสลับ Lot",
+                    message: `ต้องการสลับเครื่องจาก Lot "${selectedLot?.refLotNo || "-"}" ไปเป็น Lot "${target.refLotNo}" ใช่หรือไม่?`,
+                    confirmText: "ยืนยันสลับ Lot",
+                    cancelText: "ยกเลิก",
+                    onConfirm: () => {
+                      handleSelectLot(target);
+                    },
+                  });
                 }}
               />
             </View>

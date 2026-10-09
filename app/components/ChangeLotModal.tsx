@@ -63,6 +63,16 @@ export const ChangeLotModal = React.memo(function ChangeLotModal({
   onConfirm,
   onSwitchToOriginalLot,
 }: ChangeLotModalProps) {
+  const [isConfirming, setIsConfirming] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!visible) {
+      setIsConfirming(false);
+    }
+  }, [visible]);
+
+  const targetLotName = newLotLabel.split("|")[0].trim();
+
   return (
     <Modal
       visible={visible}
@@ -102,39 +112,82 @@ export const ChangeLotModal = React.memo(function ChangeLotModal({
             </View>
           </View>
 
-          <View style={styles.actionsContainer}>
+          {isConfirming ? (
+            <View style={styles.confirmSection}>
+              <View style={styles.confirmWarningBox}>
+                <Text style={styles.confirmWarningTitle}>
+                  ⚠️ ยืนยันการย้าย Lot พัสดุ
+                </Text>
+                <Text style={styles.confirmWarningText}>
+                  ต้องการย้ายพัสดุ "{trackingNo}" เข้าสู่ Lot "{targetLotName}" ใช่หรือไม่?
+                </Text>
+                <Text style={styles.confirmWarningSubtext}>
+                  (หากไม่แน่ใจ กรุณากดย้อนกลับแล้วนำพัสดุไปตรวจนับใหม่)
+                </Text>
+              </View>
 
-            <TouchableOpacity
-              accessibilityRole="button"
-              style={[styles.button, styles.confirmButton]}
-              onPress={onConfirm}
-              disabled={loading}
-              activeOpacity={0.8}
-            >
-              {loading ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
-              ) : (
-                <>
-                  <Text style={styles.confirmButtonText}>
-                    📦 ย้ายพัสดุเข้า Lot นี้ ({newLotLabel.split("|")[0].trim()})
-                  </Text>
-                  <Text style={styles.confirmButtonHint}>
-                    เปลี่ยนรหัส Lot ของพัสดุในระบบ
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
+              <View style={styles.actionsContainer}>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  style={[styles.button, styles.finalConfirmButton]}
+                  onPress={onConfirm}
+                  disabled={loading}
+                  activeOpacity={0.8}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : (
+                    <Text style={styles.finalConfirmButtonText}>
+                      ⚠️ ยืนยันย้ายเข้า Lot นี้
+                    </Text>
+                  )}
+                </TouchableOpacity>
 
-            <TouchableOpacity
-              accessibilityRole="button"
-              style={[styles.button, styles.cancelButton]}
-              onPress={onCancel}
-              disabled={loading}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.cancelButtonText}>ยกเลิก / ปิดหน้าต่าง</Text>
-            </TouchableOpacity>
-          </View>
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  style={[styles.button, styles.cancelButton]}
+                  onPress={() => setIsConfirming(false)}
+                  disabled={loading}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.cancelButtonText}>↩️ ย้อนกลับ</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.actionsContainer}>
+              <TouchableOpacity
+                accessibilityRole="button"
+                style={[styles.button, styles.confirmButton]}
+                onPress={() => setIsConfirming(true)}
+                disabled={loading}
+                activeOpacity={0.8}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <>
+                    <Text style={styles.confirmButtonText}>
+                      📦 ย้ายพัสดุเข้า Lot นี้ ({targetLotName})
+                    </Text>
+                    <Text style={styles.confirmButtonHint}>
+                      เปลี่ยนรหัส Lot ของพัสดุในระบบ
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                accessibilityRole="button"
+                style={[styles.button, styles.cancelButton]}
+                onPress={onCancel}
+                disabled={loading}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.cancelButtonText}>ยกเลิก / ปิดหน้าต่าง</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </View>
     </Modal>
@@ -254,5 +307,41 @@ const styles = StyleSheet.create({
     color: "#475569",
     fontSize: 13,
     fontWeight: "600",
+  },
+  confirmSection: {
+    width: "100%",
+  },
+  confirmWarningBox: {
+    backgroundColor: "#FEF2F2",
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#FECACA",
+    marginBottom: 12,
+  },
+  confirmWarningTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#DC2626",
+    marginBottom: 4,
+  },
+  confirmWarningText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#991B1B",
+    marginBottom: 4,
+    lineHeight: 18,
+  },
+  confirmWarningSubtext: {
+    fontSize: 11,
+    color: "#B91C1C",
+  },
+  finalConfirmButton: {
+    backgroundColor: "#DC2626",
+  },
+  finalConfirmButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "800",
   },
 });
