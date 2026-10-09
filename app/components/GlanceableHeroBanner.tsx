@@ -47,13 +47,19 @@ export const GlanceableHeroBanner = React.memo(function GlanceableHeroBanner({
       ? "⚠️"
       : isError
         ? "🚫"
-        : "🟢";
+        : null;
 
   return (
     <View style={containerStyle}>
       <View style={styles.topRow}>
         <View style={styles.titleGroup}>
-          <Text style={styles.icon}>{iconText}</Text>
+          {statusType === "idle" ? (
+            <View style={styles.idleDotRing}>
+              <View style={styles.idleDot} />
+            </View>
+          ) : (
+            <Text style={styles.icon}>{iconText}</Text>
+          )}
           <Text
             style={[
               styles.title,
@@ -162,6 +168,20 @@ const styles = StyleSheet.create({
   },
   icon: {
     fontSize: 18,
+  },
+  idleDotRing: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#D1FAE5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  idleDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#10B981",
   },
   title: {
     fontSize: 15,
