@@ -25,6 +25,7 @@ export const extractOriginalLot = (message?: string): string => {
 export type MinimalLot = {
   code: string;
   refLotNo: string;
+  mawbUUID?: string;
   [key: string]: any;
 };
 
@@ -36,14 +37,52 @@ export const findLotByCodeOrRef = <T extends MinimalLot>(
   const clean = query.trim().toLowerCase();
   return lots.find(
     (lot) =>
-      lot.refLotNo.toLowerCase() === clean || lot.code.toLowerCase() === clean,
+      (lot.refLotNo && lot.refLotNo.toLowerCase() === clean) ||
+      (lot.code && lot.code.toLowerCase() === clean) ||
+      (lot.mawbUUID && lot.mawbUUID.toLowerCase() === clean),
   );
+};
+
+export const isSameLot = <T extends MinimalLot>(
+  lotA?: T | null,
+  lotBIdentifier?: string | null,
+  lots?: T[],
+): boolean => {
+  if (!lotA || !lotBIdentifier || typeof lotBIdentifier !== "string") return false;
+  const cleanId = lotBIdentifier.trim().toLowerCase();
+  if (!cleanId) return false;
+
+  // Direct match against lotA's code, refLotNo, or mawbUUID
+  if (
+    (lotA.code && lotA.code.toLowerCase() === cleanId) ||
+    (lotA.refLotNo && lotA.refLotNo.toLowerCase() === cleanId) ||
+    (lotA.mawbUUID && lotA.mawbUUID.toLowerCase() === cleanId)
+  ) {
+    return true;
+  }
+
+  // Cross-reference via lots array if provided
+  if (lots && Array.isArray(lots)) {
+    const matchingLot = findLotByCodeOrRef(lots, lotBIdentifier);
+    if (matchingLot) {
+      if (
+        (matchingLot.mawbUUID && lotA.mawbUUID && matchingLot.mawbUUID === lotA.mawbUUID) ||
+        (matchingLot.code && lotA.code && matchingLot.code.toLowerCase() === lotA.code.toLowerCase()) ||
+        (matchingLot.refLotNo && lotA.refLotNo && matchingLot.refLotNo.toLowerCase() === lotA.refLotNo.toLowerCase())
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 };
 
 export type ChangeLotModalProps = {
   visible: boolean;
   trackingNo: string;
   originalLot: string;
+  originalLotLabel?: string;
   newLotLabel: string;
   loading?: boolean;
   canSwitchToOriginal?: boolean;
@@ -56,6 +95,7 @@ export const ChangeLotModal = React.memo(function ChangeLotModal({
   visible,
   trackingNo,
   originalLot,
+  originalLotLabel,
   newLotLabel,
   loading = false,
   canSwitchToOriginal = false,
@@ -99,7 +139,7 @@ export const ChangeLotModal = React.memo(function ChangeLotModal({
               <Text style={styles.label}>Lot เดิมของพัสดุ: </Text>
               <View style={styles.badgeOriginal}>
                 <Text style={styles.badgeOriginalText}>
-                  {originalLot || "ไม่ระบุ"}
+                  {originalLotLabel || originalLot || "ไม่ระบุ"}
                 </Text>
               </View>
             </View>
@@ -176,6 +216,23 @@ export const ChangeLotModal = React.memo(function ChangeLotModal({
                   </>
                 )}
               </TouchableOpacity>
+
+              {canSwitchToOriginal && onSwitchToOriginalLot ? (
+                <TouchableOpacity
+                  accessibilityRole="button"
+                  style={[styles.button, styles.switchButton]}
+                  onPress={onSwitchToOriginalLot}
+                  disabled={loading}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.switchButtonText}>
+                    🔄 สลับเครื่องเป็น Lot เดิม
+                  </Text>
+                  <Text style={styles.switchButtonHint}>
+                    เปลี่ยนเครื่องไปรับเข้าบน Lot เดิมของพัสดุ
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
 
               <TouchableOpacity
                 accessibilityRole="button"
@@ -295,6 +352,19 @@ const styles = StyleSheet.create({
   },
   confirmButtonHint: {
     color: "#FEF3C7",
+    fontSize: 11,
+    marginTop: 2,
+  },
+  switchButton: {
+    backgroundColor: "#0284C7",
+  },
+  switchButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  switchButtonHint: {
+    color: "#E0F2FE",
     fontSize: 11,
     marginTop: 2,
   },

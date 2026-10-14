@@ -15,7 +15,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -30,6 +29,7 @@ import {
   extractOriginalLot,
   findLotByCodeOrRef,
   isLotMismatchError,
+  isSameLot,
 } from "../components/ChangeLotModal";
 import {
   GlanceableHeroBanner,
@@ -240,6 +240,7 @@ export default function ReceiveScreen() {
   const [lotMismatchData, setLotMismatchData] = useState<{
     trackingNo: string;
     originalLot: string;
+    matchingLot?: LotNo;
     newLot: LotNo;
   } | null>(null);
   const [changeLotLoading, setChangeLotLoading] = useState(false);
@@ -459,13 +460,14 @@ export default function ReceiveScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      focusTrackingInput();
       if (!isScannerTestMode) {
         void ensureAuthenticated();
         if (lots.length === 0) {
           void loadLots();
         }
       }
-    }, [ensureAuthenticated, loadLots, lots.length]),
+    }, [ensureAuthenticated, focusTrackingInput, loadLots, lots.length]),
   );
 
   useEffect(() => {
@@ -899,13 +901,13 @@ export default function ReceiveScreen() {
           scannedAt: new Date().toISOString(),
           mode,
           status: "lot_mismatch",
-          originalLot,
+          originalLot: matchingLot ? matchingLot.refLotNo : originalLot,
           targetLot: selectedLot.refLotNo,
         };
         const key = getReceiveHistoryKey(selectedLot.mawbUUID);
         void appendScanRecord(key, record).then(setHistory);
         setLastStatus(
-          `${trackingNo} • Lot ไม่ตรง (${originalLot || "ไม่ระบุ"})`,
+          `${trackingNo} • Lot ไม่ตรง (${matchingLot ? matchingLot.refLotNo : originalLot || "ไม่ระบุ"})`,
         );
 
         setHeroBanner({
@@ -914,12 +916,13 @@ export default function ReceiveScreen() {
           trackingCode: trackingNo,
           badgeLabel: "Lot Mismatch",
           badgeType: "warning",
-          subtitle: `Lot เดิม: ${originalLot || "ไม่ระบุ"} | เลือก Lot: ${selectedLot.refLotNo}`,
+          subtitle: `Lot เดิม: ${matchingLot ? matchingLot.refLotNo : originalLot || "ไม่ระบุ"} | เลือก Lot: ${selectedLot.refLotNo}`,
           actionText: "เปลี่ยน Lot",
           onActionPress: () => {
             setLotMismatchData({
               trackingNo,
               originalLot: originalLot || "",
+              matchingLot,
               newLot: selectedLot,
             });
           },
@@ -931,8 +934,87 @@ export default function ReceiveScreen() {
         setLotMismatchData({
           trackingNo,
           originalLot,
+          matchingLot,
           newLot: selectedLot,
         });
+      };
+
+      const tryAutoLinkLot = async (
+        trackingNo: string,
+        originalLotStr: string,
+      ): Promise<boolean> => {
+        if (!selectedLot || !isSameLot(selectedLot, originalLotStr, lots)) {
+          return false;
+        }
+        try {
+          const apiUrl = process.env.EXPO_PUBLIC_API_URL;
+          const shippingType =
+            selectedLot.shippingTypeCode?.toLowerCase() || "air";
+          const autoLinkEndpoint = `${apiUrl}/v1/orders/received_inbound/${trackingNo}?newMawbUUID=${selectedLot.mawbUUID}&shippingType=${shippingType}&device=mobile`;
+          const token = await ensureAuthenticated();
+          if (!token) return false;
+
+          const autoLinkRes = await api.get<ApiResponse>(autoLinkEndpoint, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+          });
+
+          if (autoLinkRes.data && autoLinkRes.data.code === 200) {
+            idCounter.current += 1;
+            const record: ScanRecord = {
+              id: `${Date.now()}-${idCounter.current}`,
+              code: trackingNo,
+              scannedAt: new Date().toISOString(),
+              mode,
+              status: "success",
+              shippingType,
+              targetLot: selectedLot.refLotNo,
+              customerCode: autoLinkRes.data.data?.customerCode,
+              productName:
+                autoLinkRes.data.data?.productName ||
+                autoLinkRes.data.data?.product,
+            };
+
+            scannedCodesRef.current.add(trackingNo);
+            const liveKey = getReceiveHistoryKey(selectedLot.mawbUUID);
+            void appendScanRecord(liveKey, record).then(setHistory);
+            setLastStatus(`${trackingNo} • ${shippingType.toUpperCase()}`);
+
+            const productDesc =
+              autoLinkRes.data.data?.productName ||
+              autoLinkRes.data.data?.product ||
+              (autoLinkRes.data.data?.customerCode
+                ? `ลูกค้า: ${autoLinkRes.data.data.customerCode}`
+                : `Lot: ${selectedLot.refLotNo}`);
+
+            setHeroBanner({
+              statusType: "success",
+              title: "รับเข้าสำเร็จ",
+              trackingCode: trackingNo,
+              badgeLabel: shippingType.toUpperCase(),
+              badgeType: shippingType === "sea" ? "sea" : "air",
+              subtitle: `${productDesc} • เวลา ${new Date().toLocaleTimeString("th-TH")}`,
+            });
+            triggerSuccessHaptic();
+            resetInput();
+
+            if (shippingType === "sea") {
+              void industrialAudio.playSound("sea");
+            } else {
+              void industrialAudio.playSound("air");
+            }
+            void recordScanMetric(
+              METRICS_STORAGE_KEYS.RECEIVE_METRICS,
+              selectedLot.refLotNo,
+            ).then(setShiftMetrics);
+            return true;
+          }
+        } catch (autoErr) {
+          console.warn("Auto-link failed, falling back to manual modal:", autoErr);
+        }
+        return false;
       };
 
       try {
@@ -1082,6 +1164,9 @@ export default function ReceiveScreen() {
         } else {
           const responseMsg = response.data?.message;
           if (isLotMismatchError(responseMsg)) {
+            const originalLot = extractOriginalLot(responseMsg);
+            const autoLinked = await tryAutoLinkLot(normalized, originalLot);
+            if (autoLinked) return;
             triggerLotMismatch(normalized, responseMsg!);
             return;
           }
@@ -1110,6 +1195,9 @@ export default function ReceiveScreen() {
           error?.response?.data?.message || error?.message || "";
 
         if (isLotMismatchError(responseMsg)) {
+          const originalLot = extractOriginalLot(responseMsg);
+          const autoLinked = await tryAutoLinkLot(normalized, originalLot);
+          if (autoLinked) return;
           triggerLotMismatch(normalized, responseMsg);
           return;
         }
@@ -1406,32 +1494,42 @@ export default function ReceiveScreen() {
   const historyKeyExtractor = useCallback((item: ScanRecord) => item.id, []);
 
   return (
-    <TouchableWithoutFeedback onPress={focusTrackingInput} accessible={false}>
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        <StatusBar style="light" />
-        <ScanErrorModal
-          kind={scanError}
-          onConfirm={confirmScanError}
-          onSaveToOffline={
-            lastFailedScan ? () => void handleSaveFailedToOffline() : undefined
-          }
-        />
-        <ChangeLotModal
-          visible={lotMismatchData !== null}
-          trackingNo={lotMismatchData?.trackingNo || ""}
-          originalLot={lotMismatchData?.originalLot || ""}
-          newLotLabel={
-            lotMismatchData
-              ? `${lotMismatchData.newLot.refLotNo} | ${lotMismatchData.newLot.createdAt.slice(0, 10)}`
-              : ""
-          }
-          loading={changeLotLoading}
-          onCancel={() => {
-            setLotMismatchData(null);
-            focusTrackingInput();
-          }}
-          onConfirm={() => void handleConfirmChangeLot()}
-        />
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <StatusBar style="light" />
+      <ScanErrorModal
+        kind={scanError}
+        onConfirm={confirmScanError}
+        onSaveToOffline={
+          lastFailedScan ? () => void handleSaveFailedToOffline() : undefined
+        }
+      />
+      <ChangeLotModal
+        visible={lotMismatchData !== null}
+        trackingNo={lotMismatchData?.trackingNo || ""}
+        originalLot={lotMismatchData?.originalLot || ""}
+        originalLotLabel={
+          lotMismatchData?.matchingLot
+            ? `${lotMismatchData.matchingLot.refLotNo} (Code: ${lotMismatchData.matchingLot.code})`
+            : lotMismatchData?.originalLot || ""
+        }
+        newLotLabel={
+          lotMismatchData
+            ? `${lotMismatchData.newLot.refLotNo} (Code: ${lotMismatchData.newLot.code})`
+            : ""
+        }
+        loading={changeLotLoading}
+        canSwitchToOriginal={!!lotMismatchData?.matchingLot}
+        onSwitchToOriginalLot={
+          lotMismatchData?.matchingLot
+            ? () => handleSwitchDeviceLot(lotMismatchData.matchingLot!)
+            : undefined
+        }
+        onCancel={() => {
+          setLotMismatchData(null);
+          focusTrackingInput();
+        }}
+        onConfirm={() => void handleConfirmChangeLot()}
+      />
 
         {/* Thumb-friendly Lot Picker Modal */}
         <ThumbSelectionModal
@@ -1692,10 +1790,10 @@ export default function ReceiveScreen() {
                     onBlur={() => setIsInputFocused(false)}
                     editable={
                       canScan &&
-                      !scannedLock &&
                       scanError === null &&
                       lotMismatchData === null
                     }
+                    blurOnSubmit={false}
                     submitBehavior="submit"
                     onSubmitEditing={autoEnter ? handleManualSubmit : undefined}
                   />
@@ -1774,8 +1872,7 @@ export default function ReceiveScreen() {
                   keyExtractor={historyKeyExtractor}
                   renderItem={renderHistoryItem}
                   style={styles.historyScroll}
-                  nestedScrollEnabled
-                  showsVerticalScrollIndicator
+                  scrollEnabled={false}
                   initialNumToRender={8}
                   maxToRenderPerBatch={8}
                   windowSize={3}
@@ -1786,7 +1883,6 @@ export default function ReceiveScreen() {
           </ScrollView>
         </View>
       </View>
-    </TouchableWithoutFeedback>
   );
 }
 
@@ -2253,7 +2349,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   historyScroll: {
-    maxHeight: 300,
+    width: "100%",
   },
   historyItem: {
     flexDirection: "row",

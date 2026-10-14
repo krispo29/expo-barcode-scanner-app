@@ -33,9 +33,16 @@ export function useHardwareScanner({
   }, []);
 
   const focusTrackingInput = useCallback(() => {
+    inputRef.current?.focus();
     setTimeout(() => {
       inputRef.current?.focus();
     }, 50);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 150);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 300);
   }, []);
 
   const resetInput = useCallback(() => {

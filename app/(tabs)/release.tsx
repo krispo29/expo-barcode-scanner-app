@@ -15,7 +15,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -521,13 +520,14 @@ export default function ReleaseScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      focusTrackingInput();
       if (!isScannerTestMode) {
         void ensureAuthenticated();
         if (customers.length === 0) {
           void loadCustomers();
         }
       }
-    }, [ensureAuthenticated, loadCustomers, customers.length]),
+    }, [customers.length, ensureAuthenticated, focusTrackingInput, loadCustomers]),
   );
 
   useEffect(() => {
@@ -1083,15 +1083,14 @@ export default function ReleaseScreen() {
   const historyKeyExtractor = useCallback((item: ScanRecord) => item.id, []);
 
   return (
-    <TouchableWithoutFeedback onPress={focusTrackingInput} accessible={false}>
-      <View style={[styles.container, { paddingTop: insets.top }]}>
-        <ScanErrorModal
-          kind={scanError}
-          onConfirm={confirmScanError}
-          onSaveToOffline={
-            lastFailedScan ? () => void handleSaveFailedToOffline() : undefined
-          }
-        />
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <ScanErrorModal
+        kind={scanError}
+        onConfirm={confirmScanError}
+        onSaveToOffline={
+          lastFailedScan ? () => void handleSaveFailedToOffline() : undefined
+        }
+      />
 
         {/* Thumb-friendly Customer Selection Modal */}
         <ThumbSelectionModal
@@ -1323,7 +1322,8 @@ export default function ReleaseScreen() {
                     showSoftInputOnFocus={showSoftKeyboard}
                     onFocus={() => setIsInputFocused(true)}
                     onBlur={() => setIsInputFocused(false)}
-                    editable={canScan && !scannedLock && scanError === null}
+                    editable={canScan && scanError === null}
+                    blurOnSubmit={false}
                     submitBehavior="submit"
                     onSubmitEditing={autoEnter ? handleManualSubmit : undefined}
                   />
@@ -1402,8 +1402,7 @@ export default function ReleaseScreen() {
                   keyExtractor={historyKeyExtractor}
                   renderItem={renderHistoryItem}
                   style={styles.historyScroll}
-                  nestedScrollEnabled
-                  showsVerticalScrollIndicator
+                  scrollEnabled={false}
                   initialNumToRender={8}
                   maxToRenderPerBatch={8}
                   windowSize={3}
@@ -1414,7 +1413,6 @@ export default function ReleaseScreen() {
           </ScrollView>
         </View>
       </View>
-    </TouchableWithoutFeedback>
   );
 }
 
@@ -1845,7 +1843,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   historyScroll: {
-    maxHeight: 300,
+    width: "100%",
   },
   historyItem: {
     flexDirection: "row",

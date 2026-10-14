@@ -46,6 +46,8 @@ export const QuickChips = React.memo(function QuickChips({
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
+        directionalLockEnabled
+        nestedScrollEnabled
       >
         {items.map((item) => {
           const isActive = !!item.active;
