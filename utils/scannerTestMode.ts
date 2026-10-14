@@ -67,6 +67,7 @@ export const getScannerTestOutcome = (code: string): ScannerTestOutcome => {
   }
   if (
     upper === "TESTD02" ||
+    upper.includes("TESTD02") ||
     upper.includes("MISMATCH") ||
     upper.startsWith("LOTMISMATCH")
   ) {
