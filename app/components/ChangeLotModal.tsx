@@ -217,23 +217,6 @@ export const ChangeLotModal = React.memo(function ChangeLotModal({
                 )}
               </TouchableOpacity>
 
-              {canSwitchToOriginal && onSwitchToOriginalLot ? (
-                <TouchableOpacity
-                  accessibilityRole="button"
-                  style={[styles.button, styles.switchButton]}
-                  onPress={onSwitchToOriginalLot}
-                  disabled={loading}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.switchButtonText}>
-                    🔄 สลับเครื่องเป็น Lot เดิม
-                  </Text>
-                  <Text style={styles.switchButtonHint}>
-                    เปลี่ยนเครื่องไปรับเข้าบน Lot เดิมของพัสดุ
-                  </Text>
-                </TouchableOpacity>
-              ) : null}
-
               <TouchableOpacity
                 accessibilityRole="button"
                 style={[styles.button, styles.cancelButton]}
@@ -352,19 +335,6 @@ const styles = StyleSheet.create({
   },
   confirmButtonHint: {
     color: "#FEF3C7",
-    fontSize: 11,
-    marginTop: 2,
-  },
-  switchButton: {
-    backgroundColor: "#0284C7",
-  },
-  switchButtonText: {
-    color: "#FFFFFF",
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  switchButtonHint: {
-    color: "#E0F2FE",
     fontSize: 11,
     marginTop: 2,
   },

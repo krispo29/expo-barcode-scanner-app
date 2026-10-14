@@ -1509,21 +1509,11 @@ export default function ReceiveScreen() {
         originalLot={lotMismatchData?.originalLot || ""}
         originalLotLabel={
           lotMismatchData?.matchingLot
-            ? `${lotMismatchData.matchingLot.refLotNo} (Code: ${lotMismatchData.matchingLot.code})`
+            ? lotMismatchData.matchingLot.refLotNo
             : lotMismatchData?.originalLot || ""
         }
-        newLotLabel={
-          lotMismatchData
-            ? `${lotMismatchData.newLot.refLotNo} (Code: ${lotMismatchData.newLot.code})`
-            : ""
-        }
+        newLotLabel={lotMismatchData ? lotMismatchData.newLot.refLotNo : ""}
         loading={changeLotLoading}
-        canSwitchToOriginal={!!lotMismatchData?.matchingLot}
-        onSwitchToOriginalLot={
-          lotMismatchData?.matchingLot
-            ? () => handleSwitchDeviceLot(lotMismatchData.matchingLot!)
-            : undefined
-        }
         onCancel={() => {
           setLotMismatchData(null);
           focusTrackingInput();
