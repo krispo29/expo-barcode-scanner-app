@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -138,16 +138,30 @@ export function ThumbSelectionModal({
 
   // Local search text for instant typing feedback (0ms latency)
   const [localSearch, setLocalSearch] = useState(searchValue);
+  const lastDispatchedRef = useRef(searchValue);
 
-  // Synchronize when parent searchValue changes (e.g. modal opens/resets)
+  // Synchronize when parent changes searchValue externally (e.g. external reset)
+  // Only update if searchValue was NOT dispatched by this component
   useEffect(() => {
-    setLocalSearch(searchValue);
+    if (searchValue !== lastDispatchedRef.current) {
+      lastDispatchedRef.current = searchValue;
+      setLocalSearch(searchValue);
+    }
   }, [searchValue]);
+
+  // Synchronize when modal opens fresh
+  useEffect(() => {
+    if (visible) {
+      setLocalSearch(searchValue);
+      lastDispatchedRef.current = searchValue;
+    }
+  }, [visible]);
 
   // Debounce search update to parent (150ms) to keep scrolling and typing buttery smooth
   useEffect(() => {
     const timer = setTimeout(() => {
       if (localSearch !== searchValue) {
+        lastDispatchedRef.current = localSearch;
         onSearchChange(localSearch);
       }
     }, 150);
@@ -156,6 +170,7 @@ export function ThumbSelectionModal({
 
   const handleClearSearch = useCallback(() => {
     setLocalSearch("");
+    lastDispatchedRef.current = "";
     onSearchChange("");
   }, [onSearchChange]);
 
