@@ -137,36 +137,29 @@ export function ThumbSelectionModal({
   const insets = useSafeAreaInsets();
 
   // Local search text for instant typing feedback (0ms latency)
-  const [localSearch, setLocalSearch] = useState(searchValue);
-  const lastDispatchedRef = useRef(searchValue);
-
-  // Synchronize when parent changes searchValue externally (e.g. external reset)
-  // Only update if searchValue was NOT dispatched by this component
-  useEffect(() => {
-    if (searchValue !== lastDispatchedRef.current) {
-      lastDispatchedRef.current = searchValue;
-      setLocalSearch(searchValue);
-    }
-  }, [searchValue]);
+  const [localSearch, setLocalSearch] = useState(searchValue || "");
+  const lastDispatchedRef = useRef(searchValue || "");
 
   // Synchronize when modal opens fresh
   useEffect(() => {
     if (visible) {
-      setLocalSearch(searchValue);
-      lastDispatchedRef.current = searchValue;
+      setLocalSearch(searchValue || "");
+      lastDispatchedRef.current = searchValue || "";
     }
   }, [visible]);
 
   // Debounce search update to parent (150ms) to keep scrolling and typing buttery smooth
+  // Notice: We do NOT sync parent's searchValue back into localSearch while open,
+  // completely eliminating any race condition where debounced echoes delete or bounce back characters.
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (localSearch !== searchValue) {
+      if (localSearch !== lastDispatchedRef.current) {
         lastDispatchedRef.current = localSearch;
         onSearchChange(localSearch);
       }
     }, 150);
     return () => clearTimeout(timer);
-  }, [localSearch, searchValue, onSearchChange]);
+  }, [localSearch, onSearchChange]);
 
   const handleClearSearch = useCallback(() => {
     setLocalSearch("");
@@ -288,6 +281,8 @@ export function ThumbSelectionModal({
               onChangeText={setLocalSearch}
               autoCorrect={false}
               autoCapitalize="none"
+              autoComplete="off"
+              returnKeyType="search"
               clearButtonMode="never"
             />
             {localSearch.length > 0 && (
