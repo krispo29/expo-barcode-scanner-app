@@ -305,9 +305,8 @@ export default function ReleaseScreen() {
   }, [shiftMetrics.recentTimestamps, velocityTick]);
 
   const activeCustomerCount = useMemo(() => {
-    if (!customer) return 0;
-    return shiftMetrics.byCategory[customer.code] || 0;
-  }, [customer, shiftMetrics.byCategory]);
+    return history.length;
+  }, [history.length]);
 
   const handleResetTally = useCallback(async () => {
     const fresh = await resetShiftMetrics(METRICS_STORAGE_KEYS.RELEASE_METRICS);
@@ -383,17 +382,19 @@ export default function ReleaseScreen() {
     if (!customer) return;
     Alert.alert(
       "เริ่มรอบใหม่",
-      `ต้องการล้างประวัติการสแกนของลูกค้า ${customer.code} ใช่หรือไม่? (ข้อมูลในระบบจะไม่ได้รับผลกระทบ)`,
+      `ต้องการล้างตัวเลขและประวัติการสแกนรอบนี้ของลูกค้า ${customer.code} ใช่หรือไม่? (ข้อมูลในระบบจะไม่ได้รับผลกระทบ)`,
       [
         { text: "ยกเลิก", style: "cancel" },
         {
-          text: "ล้างประวัติ",
+          text: "ล้างตัวเลขนับรอบ",
           style: "destructive",
           onPress: async () => {
             const key = getReleaseHistoryKey(customer.uuid);
             await clearScanHistory(key);
             setHistory([]);
             scannedCodesRef.current.clear();
+            setLastStatus("-");
+            setHeroBanner(null);
             triggerSuccessHaptic();
           },
         },
@@ -843,14 +844,23 @@ export default function ReleaseScreen() {
           scannedCodesRef.current.add(normalized);
           const testKey = getReleaseHistoryKey(customer.uuid);
           void appendScanRecord(testKey, record).then(setHistory);
-          setLastStatus(`${normalized} • ${customer.name}`);
+
+          const currentBatchCount = history.length + 1;
+          const targetTotal = customer.totalOrder || 0;
+          const targetSuffix = targetTotal > 0 ? ` / ${targetTotal} ชิ้น` : " ชิ้น";
+          setLastStatus(
+            `${normalized} • ${customer.name} (ชิ้นที่ ${currentBatchCount})`,
+          );
           setHeroBanner({
             statusType: "success",
-            title: "ปล่อยออกสำเร็จ",
+            title: `ปล่อยออกสำเร็จ (ชิ้นที่ ${currentBatchCount})`,
             trackingCode: normalized,
-            badgeLabel: customer.code,
+            badgeLabel:
+              targetTotal > 0
+                ? `${currentBatchCount}/${targetTotal}`
+                : `${currentBatchCount} ชิ้น`,
             badgeType: "success",
-            subtitle: `${customer.name} • ${new Date().toLocaleTimeString("th-TH")}`,
+            subtitle: `${customer.name} • ยิงออกรอบนี้แล้ว ${currentBatchCount}${targetSuffix} • ${new Date().toLocaleTimeString("th-TH")}`,
           });
           triggerSuccessHaptic();
           resetInput();
@@ -899,14 +909,23 @@ export default function ReleaseScreen() {
           scannedCodesRef.current.add(normalized);
           const liveKey = getReleaseHistoryKey(customer.uuid);
           void appendScanRecord(liveKey, record).then(setHistory);
-          setLastStatus(`${normalized} • ${customer.name}`);
+
+          const currentBatchCount = history.length + 1;
+          const targetTotal = customer.totalOrder || 0;
+          const targetSuffix = targetTotal > 0 ? ` / ${targetTotal} ชิ้น` : " ชิ้น";
+          setLastStatus(
+            `${normalized} • ${customer.name} (ชิ้นที่ ${currentBatchCount})`,
+          );
           setHeroBanner({
             statusType: "success",
-            title: "ปล่อยออกสำเร็จ",
+            title: `ปล่อยออกสำเร็จ (ชิ้นที่ ${currentBatchCount})`,
             trackingCode: normalized,
-            badgeLabel: customer.code,
+            badgeLabel:
+              targetTotal > 0
+                ? `${currentBatchCount}/${targetTotal}`
+                : `${currentBatchCount} ชิ้น`,
             badgeType: "success",
-            subtitle: `${customer.name} • ${new Date().toLocaleTimeString("th-TH")}`,
+            subtitle: `${customer.name} • ยิงออกรอบนี้แล้ว ${currentBatchCount}${targetSuffix} • ${new Date().toLocaleTimeString("th-TH")}`,
           });
           triggerSuccessHaptic();
           resetInput();
@@ -1202,7 +1221,7 @@ export default function ReleaseScreen() {
                       </Text>
                       {customer && (
                         <Text style={styles.selectButtonDescription}>
-                          📧 {customer.email} | 📞 {customer.tel}
+                          📦 ในระบบ: {customer.totalOrder || 0} PKGS | 📞 {customer.tel || "-"}
                         </Text>
                       )}
                     </View>
@@ -1254,25 +1273,87 @@ export default function ReleaseScreen() {
               />
             )}
 
-            {/* Ready to Scan Notice */}
-            {!heroBanner && (
-              canScan ? (
-                <View style={[styles.section, styles.readyNotice]}>
-                  <Text style={styles.readyNoticeTitle}>✅ พร้อมสแกนบาร์โค้ด</Text>
-                  <Text style={styles.readyNoticeText}>
-                    ลูกค้า: {customer?.name} ({customer?.code})
-                  </Text>
+            {/* Batch Release Counter Card (ยอดปล่อยออกรอบนี้ มีตัวเลขยืนยัน) */}
+            {customer && (
+              <View style={styles.batchCounterCard}>
+                <View style={styles.batchCounterHeader}>
+                  <View style={styles.batchCounterLeft}>
+                    <Text style={styles.batchCounterBadge}>📦 ยอดปล่อยออกรอบนี้</Text>
+                    <Text style={styles.batchCounterCustomerText} numberOfLines={1}>
+                      {customer.code} • {customer.name}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.batchResetBtn}
+                    onPress={handleClearBatchHistory}
+                    activeOpacity={0.7}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Text style={styles.batchResetBtnText}>🔄 เริ่มรอบใหม่</Text>
+                  </TouchableOpacity>
                 </View>
-              ) : (
-                <View style={[styles.section, styles.hardwareNotice]}>
-                  <Text style={styles.hardwareNoticeTitle}>
-                    ⚠️ กรุณาเลือกลูกค้าก่อนสแกน
-                  </Text>
-                  <Text style={styles.hardwareNoticeText}>
-                    กรุณาเลือกลูกค้าก่อนที่จะสามารถสแกนบาร์โค้ดได้
-                  </Text>
+
+                <View style={styles.batchCounterBody}>
+                  <View style={styles.batchBigNumberWrap}>
+                    <Text style={styles.batchBigNumber}>{history.length}</Text>
+                    <Text style={styles.batchBigUnit}>ชิ้น</Text>
+                  </View>
+
+                  <View style={styles.batchInfoWrap}>
+                    {customer.totalOrder > 0 ? (
+                      <>
+                        <Text style={styles.batchTargetText}>
+                          เป้าหมายในระบบ: <Text style={styles.batchBoldText}>{customer.totalOrder}</Text> ชิ้น
+                        </Text>
+                        <View
+                          style={[
+                            styles.batchStatusPill,
+                            history.length >= customer.totalOrder
+                              ? styles.batchStatusPillComplete
+                              : styles.batchStatusPillPending,
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.batchStatusPillText,
+                              history.length >= customer.totalOrder
+                                ? styles.batchStatusPillTextComplete
+                                : styles.batchStatusPillTextPending,
+                            ]}
+                          >
+                            {history.length >= customer.totalOrder
+                              ? "✅ ปล่อยครบตามจำนวนแล้ว"
+                              : `⏳ รอปล่อยอีก ${customer.totalOrder - history.length} ชิ้น`}
+                          </Text>
+                        </View>
+                      </>
+                    ) : (
+                      <>
+                        <Text style={styles.batchTargetText}>
+                          สถานะ: <Text style={styles.batchBoldText}>บันทึกสำเร็จ</Text>
+                        </Text>
+                        <Text style={styles.batchSubinfoText}>
+                          {history.length > 0
+                            ? `มีตัวเลขยืนยันรอบนี้ ${history.length} รายการ`
+                            : "พร้อมสแกนพัสดุสำหรับลูกค้ารายนี้"}
+                        </Text>
+                      </>
+                    )}
+                  </View>
                 </View>
-              )
+              </View>
+            )}
+
+            {/* Prompt to select customer when none selected */}
+            {!customer && (
+              <View style={[styles.section, styles.hardwareNotice]}>
+                <Text style={styles.hardwareNoticeTitle}>
+                  ⚠️ กรุณาเลือกลูกค้าก่อนสแกน
+                </Text>
+                <Text style={styles.hardwareNoticeText}>
+                  กรุณาเลือกลูกค้าก่อนที่จะสามารถสแกนบาร์โค้ดได้
+                </Text>
+              </View>
             )}
 
             {/* Offline Sync Banner (Visible when items waiting in queue) */}
@@ -1942,5 +2023,120 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     color: "#DC2626",
+  },
+  batchCounterCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1.5,
+    borderColor: "#D1D5DB",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  batchCounterHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6",
+    paddingBottom: 8,
+  },
+  batchCounterLeft: {
+    flex: 1,
+    marginRight: 8,
+  },
+  batchCounterBadge: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#4B5563",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  batchCounterCustomerText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1F2937",
+    marginTop: 2,
+  },
+  batchResetBtn: {
+    backgroundColor: "#F3F4F6",
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  batchResetBtnText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#374151",
+  },
+  batchCounterBody: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  batchBigNumberWrap: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    paddingRight: 16,
+    borderRightWidth: 1,
+    borderRightColor: "#E5E7EB",
+  },
+  batchBigNumber: {
+    fontSize: 38,
+    fontWeight: "800",
+    color: "#059669",
+    fontFamily: Platform.OS === "android" ? "monospace" : "Courier",
+  },
+  batchBigUnit: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#6B7280",
+    marginLeft: 4,
+  },
+  batchInfoWrap: {
+    flex: 1,
+    paddingLeft: 14,
+  },
+  batchTargetText: {
+    fontSize: 13,
+    color: "#4B5563",
+    marginBottom: 4,
+  },
+  batchBoldText: {
+    fontWeight: "700",
+    color: "#111827",
+  },
+  batchSubinfoText: {
+    fontSize: 12,
+    color: "#6B7280",
+  },
+  batchStatusPill: {
+    alignSelf: "flex-start",
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    marginTop: 2,
+  },
+  batchStatusPillPending: {
+    backgroundColor: "#FEF3C7",
+  },
+  batchStatusPillComplete: {
+    backgroundColor: "#D1FAE5",
+  },
+  batchStatusPillText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  batchStatusPillTextPending: {
+    color: "#B45309",
+  },
+  batchStatusPillTextComplete: {
+    color: "#047857",
   },
 });
