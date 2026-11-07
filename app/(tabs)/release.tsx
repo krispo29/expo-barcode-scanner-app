@@ -846,8 +846,6 @@ export default function ReleaseScreen() {
           void appendScanRecord(testKey, record).then(setHistory);
 
           const currentBatchCount = history.length + 1;
-          const targetTotal = customer.totalOrder || 0;
-          const targetSuffix = targetTotal > 0 ? ` / ${targetTotal} ชิ้น` : " ชิ้น";
           setLastStatus(
             `${normalized} • ${customer.name} (ชิ้นที่ ${currentBatchCount})`,
           );
@@ -855,12 +853,9 @@ export default function ReleaseScreen() {
             statusType: "success",
             title: `ปล่อยออกสำเร็จ (ชิ้นที่ ${currentBatchCount})`,
             trackingCode: normalized,
-            badgeLabel:
-              targetTotal > 0
-                ? `${currentBatchCount}/${targetTotal}`
-                : `${currentBatchCount} ชิ้น`,
+            badgeLabel: `${currentBatchCount} ชิ้น`,
             badgeType: "success",
-            subtitle: `${customer.name} • ยิงออกรอบนี้แล้ว ${currentBatchCount}${targetSuffix} • ${new Date().toLocaleTimeString("th-TH")}`,
+            subtitle: `${customer.name} • ยิงออกรอบนี้แล้ว ${currentBatchCount} ชิ้น • ${new Date().toLocaleTimeString("th-TH")}`,
           });
           triggerSuccessHaptic();
           resetInput();
@@ -911,8 +906,6 @@ export default function ReleaseScreen() {
           void appendScanRecord(liveKey, record).then(setHistory);
 
           const currentBatchCount = history.length + 1;
-          const targetTotal = customer.totalOrder || 0;
-          const targetSuffix = targetTotal > 0 ? ` / ${targetTotal} ชิ้น` : " ชิ้น";
           setLastStatus(
             `${normalized} • ${customer.name} (ชิ้นที่ ${currentBatchCount})`,
           );
@@ -920,12 +913,9 @@ export default function ReleaseScreen() {
             statusType: "success",
             title: `ปล่อยออกสำเร็จ (ชิ้นที่ ${currentBatchCount})`,
             trackingCode: normalized,
-            badgeLabel:
-              targetTotal > 0
-                ? `${currentBatchCount}/${targetTotal}`
-                : `${currentBatchCount} ชิ้น`,
+            badgeLabel: `${currentBatchCount} ชิ้น`,
             badgeType: "success",
-            subtitle: `${customer.name} • ยิงออกรอบนี้แล้ว ${currentBatchCount}${targetSuffix} • ${new Date().toLocaleTimeString("th-TH")}`,
+            subtitle: `${customer.name} • ยิงออกรอบนี้แล้ว ${currentBatchCount} ชิ้น • ${new Date().toLocaleTimeString("th-TH")}`,
           });
           triggerSuccessHaptic();
           resetInput();
@@ -1221,7 +1211,7 @@ export default function ReleaseScreen() {
                       </Text>
                       {customer && (
                         <Text style={styles.selectButtonDescription}>
-                          📦 ในระบบ: {customer.totalOrder || 0} PKGS | 📞 {customer.tel || "-"}
+                          📞 {customer.tel || "-"} | 📧 {customer.email || "-"}
                         </Text>
                       )}
                     </View>
@@ -1300,45 +1290,14 @@ export default function ReleaseScreen() {
                   </View>
 
                   <View style={styles.batchInfoWrap}>
-                    {customer.totalOrder > 0 ? (
-                      <>
-                        <Text style={styles.batchTargetText}>
-                          เป้าหมายในระบบ: <Text style={styles.batchBoldText}>{customer.totalOrder}</Text> ชิ้น
-                        </Text>
-                        <View
-                          style={[
-                            styles.batchStatusPill,
-                            history.length >= customer.totalOrder
-                              ? styles.batchStatusPillComplete
-                              : styles.batchStatusPillPending,
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.batchStatusPillText,
-                              history.length >= customer.totalOrder
-                                ? styles.batchStatusPillTextComplete
-                                : styles.batchStatusPillTextPending,
-                            ]}
-                          >
-                            {history.length >= customer.totalOrder
-                              ? "✅ ปล่อยครบตามจำนวนแล้ว"
-                              : `⏳ รอปล่อยอีก ${customer.totalOrder - history.length} ชิ้น`}
-                          </Text>
-                        </View>
-                      </>
-                    ) : (
-                      <>
-                        <Text style={styles.batchTargetText}>
-                          สถานะ: <Text style={styles.batchBoldText}>บันทึกสำเร็จ</Text>
-                        </Text>
-                        <Text style={styles.batchSubinfoText}>
-                          {history.length > 0
-                            ? `มีตัวเลขยืนยันรอบนี้ ${history.length} รายการ`
-                            : "พร้อมสแกนพัสดุสำหรับลูกค้ารายนี้"}
-                        </Text>
-                      </>
-                    )}
+                    <Text style={styles.batchTargetText}>
+                      สถานะ: <Text style={styles.batchBoldText}>นับยอดรอบนี้</Text>
+                    </Text>
+                    <Text style={styles.batchSubinfoText}>
+                      {history.length > 0
+                        ? `ยิงสำเร็จแล้ว ${history.length} รายการ (มีตัวเลขยืนยัน)`
+                        : "พร้อมสแกนพัสดุสำหรับลูกค้ารายนี้"}
+                    </Text>
                   </View>
                 </View>
               </View>
@@ -2115,28 +2074,5 @@ const styles = StyleSheet.create({
   batchSubinfoText: {
     fontSize: 12,
     color: "#6B7280",
-  },
-  batchStatusPill: {
-    alignSelf: "flex-start",
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    marginTop: 2,
-  },
-  batchStatusPillPending: {
-    backgroundColor: "#FEF3C7",
-  },
-  batchStatusPillComplete: {
-    backgroundColor: "#D1FAE5",
-  },
-  batchStatusPillText: {
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  batchStatusPillTextPending: {
-    color: "#B45309",
-  },
-  batchStatusPillTextComplete: {
-    color: "#047857",
   },
 });
